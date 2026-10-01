@@ -44,7 +44,15 @@ Full history remains saved and readable; model context currently includes up to 
 
 Answers render Markdown while reasoning remains plain text. Markdown supports headings, emphasis, lists, quotes, code blocks, links and tables. Marked 18.0.14 and DOMPurify 3.4.16 are vendored and served locally, with no CDN dependency. HTML is sanitized, remote images are suppressed, and citations become source buttons outside links and code blocks. Numeric-only records and structural HUB nodes are excluded from search and new embeddings; valid semantic-only results still appear with a null lexical score. Structural nodes remain available in graph context.
 
-## Data
+## Exploring dialogue branches
+
+**Open dialogue context** follows outgoing database links in order, showing the spoken exchange until the next choice point. Select a dialogue choice to continue, or use **Previous branch** to go back. Structural HUB records are labeled as dialogue choice points instead of showing their placeholder `0`. Conditions, alternate lines, script effects, active checks and estimated passive skill requirements remain available. Minnie does not simulate your game state: conditional forks are shown as possible continuations, not silently chosen. Cycles and sequences longer than 100 linked nodes pause with an explicit continuation link.
+
+## First semantic index
+
+In **Settings → Embeddings**, enter your embedding provider's `/v1` base URL and API key, load models, and choose an embedding-capable model. Save that provider and use **Ping embedding provider** to verify it. Then select **Build semantic index** and keep Minnie running until it finishes. Interrupted builds resume when started again. Use the same provider URL and model for later searches. The app prepares its SQLite index automatically; no manual database conversion is needed. Building the index sends dialogue to the provider and may incur usage charges. Answer-model settings are separate.
+
+## Data files
 
 `source/` contains the extracted original DB and Ruby browser reference. The app opens the original database with `mode=ro`. `data/normalized.sqlite` contains the generated lexical index, metadata and vectors; `data/` is ignored by version control. The supplied source archives are retained.
 

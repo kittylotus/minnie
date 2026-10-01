@@ -29,3 +29,9 @@
 .library-chat .library-row-actions label{margin:0 0 0 auto;width:auto;max-width:160px}
 .library-chat .library-row-actions select{margin:0;width:160px;max-width:100%;font-size:12px;min-height:44px;padding:8px 26px 8px 10px;background:transparent;border-color:#383b35}
 @media(max-width:440px){.library-chat{padding:12px 9px 10px}.library-chat .library-row-actions{gap:0 16px}.library-chat .library-row-actions label{flex-basis:100%;max-width:none;margin-left:0}.library-chat .library-row-actions select{width:100%}.library-chat .chat-name{font-size:16px}}
+
+.branch-line{margin-bottom:18px}.branch-line .evidence-card{padding:18px 0}.branch-line .evidence-focus{padding:18px}.branch-line details{margin:7px 0}.dialogue-choices{padding-left:24px;margin:12px 0 24px}.dialogue-choices li{padding:4px 0 12px}.dialogue-choice{display:block;width:100%;min-height:44px;text-align:left;border:1px solid var(--line);border-radius:6px;padding:13px 15px;font:var(--body-size)/1.65 Georgia,serif;background:var(--surface)}.dialogue-choice:hover,.dialogue-choice:focus-visible{background:#252724;border-color:#41433c}.choice-speaker{display:block;font:11px/1.5 Segoe UI,sans-serif;color:var(--lavender);margin-bottom:6px;letter-spacing:.5px}.embedding-steps{padding-left:22px;margin:0 0 18px;font-size:13px;line-height:1.8;color:var(--text)}.embedding-steps li{padding-left:3px;margin:5px 0}
+
+.passive-check{font-size:12px;line-height:1.7;color:var(--muted);margin:8px 0}
+
+#context-back .icon{transform:rotate(-90deg)}

@@ -18,7 +18,7 @@ function feedback(text,error=false){$('#feedback').textContent=text;$('#feedback
 function setView(next){if(busy)return;view=next;document.querySelectorAll('[data-view]').forEach(b=>{const active=b.dataset.view===view;b.classList.toggle('active',active);if(b.hasAttribute('role'))b.setAttribute('aria-selected',active)});const shelf=view==='saved';$('#page-label').textContent=shelf?'SAVED EVIDENCE':view==='search'?'DIALOGUE SEARCH':'RESEARCH';$('#heading').textContent=shelf?'Keep the receipts.':view==='search'?'Find the words.':'Follow a thread.';$('#intro').textContent=shelf?'A shelf for the lines you want to come back to.':view==='search'?'The dialogue itself. Exact terms, a speaker, a line you remember.':'A question, a half-remembered line, a very specific rabbit hole.';$('.tabs').hidden=shelf;$('#query-form').hidden=shelf;$('.filters').hidden=shelf;$('#saved-view').hidden=!shelf;$('#starting').hidden=shelf;$('#output').hidden=true;$('#depth-wrap').hidden=view!=='research';$('#verbosity-wrap').hidden=view!=='research';$('#mode-wrap').hidden=view!=='search';$('#submit').textContent=view==='search'?'Search':'Research';$('#query').placeholder=view==='search'?'A phrase, a name, a fragment of dialogue…':'What does the game say about memory and the Pale?';feedback('');if(shelf)renderSaved();}
 document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{if(busy)return;setView(b.dataset.view);syncChatView();});
 document.querySelectorAll('[data-prompt]').forEach(b=>b.onclick=()=>{$('#query').value=b.dataset.prompt;$('#query').focus();});
-function card(n,focus=false){const isSaved=saved.some(x=>x.id===n.id);return `<article class="evidence-card ${focus?'evidence-focus':''}"><div class="card-top"><span class="speaker-name">${escapeHTML(n.speaker)}</span><span class="node-id">${escapeHTML(n.id)}</span></div><p class="dialogue-text">${escapeHTML(n.text||'(Branch node without spoken dialogue)')}</p><div class="card-actions"><button class="text-button" data-context="${escapeHTML(n.id)}">Open dialogue context</button><button class="text-button" data-save="${escapeHTML(n.id)}">${isSaved?icon('check')+' Saved':'Save evidence'}</button><small>${escapeHTML(n.title)}</small></div>${n.retrieval?`<details><summary>Retrieval details</summary><pre>${escapeHTML(JSON.stringify(n.retrieval,null,2))}</pre></details>`:''}</article>`;}
+function card(n,focus=false){const isSaved=saved.some(x=>x.id===n.id);return `<article class="evidence-card ${focus?'evidence-focus':''}"><div class="card-top"><span class="speaker-name">${escapeHTML(n.speaker)}</span><span class="node-id">${escapeHTML(n.id)}</span></div><p class="dialogue-text">${escapeHTML(n.speaker.trim().toUpperCase()==='HUB'?'Dialogue choice point':n.text||'(Branch node without spoken dialogue)')}</p><div class="card-actions"><button class="text-button" data-context="${escapeHTML(n.id)}">Open dialogue context</button><button class="text-button" data-save="${escapeHTML(n.id)}">${isSaved?icon('check')+' Saved':'Save evidence'}</button><small>${escapeHTML(n.title)}</small></div>${n.retrieval?`<details><summary>Retrieval details</summary><pre>${escapeHTML(JSON.stringify(n.retrieval,null,2))}</pre></details>`:''}</article>`;}
 const records=new Map();
 function syncChatView(){
   const active=view==='research';$('#chat-toolbar').hidden=!active;$('#chat-history').hidden=!active||!currentChat?.turns.length;$('#current-question').hidden=!active||!currentChat;
@@ -92,7 +92,40 @@ $('#delete-cancel').onclick=()=>$('#delete-dialog').close();
 $('#delete-confirm').onclick=async()=>{try{await libraryAction(deleteAction);$('#delete-dialog').close();}catch(e){$('#delete-error').textContent=e.message;}};
 function bindCards(container,nodes){nodes.forEach(n=>records.set(n.id,n));container.querySelectorAll('[data-context]').forEach(b=>b.onclick=()=>openContext(b.dataset.context));container.querySelectorAll('[data-save]').forEach(b=>b.onclick=()=>{const id=b.dataset.save;const exists=saved.some(n=>n.id===id);saved=exists?saved.filter(n=>n.id!==id):[...saved,records.get(id)];localStorage.setItem('minnie-evidence',JSON.stringify(saved));b.innerHTML=exists?'Save evidence':icon('check')+' Saved';if(view==='saved')renderSaved();});}
 function renderSaved(){$('#saved-list').innerHTML=saved.length?saved.map(n=>card(n)).join(''):'<p class="empty">Your shelf is empty. Save a line from a search or a source citation.</p>';bindCards($('#saved-list'),saved);}
-async function openContext(id){const d=$('#evidence-dialog');if(!d.open)d.showModal();$('#evidence-title').textContent='Source '+id;$('#evidence-body').textContent='Following dialogue links…';try{const data=await api('context',{nodeId:id,depth:1});const center=data.center;const parents=new Set(data.edges.filter(e=>e.to===id).map(e=>e.from));const children=new Set(data.edges.filter(e=>e.from===id).map(e=>e.to));let html=card(center,true);if(center.conditions)html+=`<details><summary>Conditions for this line</summary><pre>${escapeHTML(center.conditions)}</pre></details>`;const alternatives=JSON.parse(center.alternates||'[]');if(alternatives.length)html+=`<details><summary>Alternate lines (${alternatives.length})</summary>${alternatives.map(a=>`<p class="dialogue-text">${escapeHTML(a.text)}</p><pre>${escapeHTML(a.condition)}</pre>`).join('')}</details>`;if(data.checks.length)html+=`<details><summary>Skill checks & modifiers</summary><pre>${escapeHTML(JSON.stringify({checks:data.checks,modifiers:data.modifiers},null,2))}</pre></details>`;for(const [title,ids]of[['Leads into this line',parents],['Branches from this line',children]]){const nodes=data.nodes.filter(n=>ids.has(n.id)&&n.id!==id);html+=`<div class="section-heading"><h2>${title}</h2><span>${nodes.length} linked lines</span></div>`+(nodes.length?nodes.map(n=>card(n)).join(''):'<p class="dialog-note">No spoken dialogue on an immediate linked node.</p>');}$('#evidence-body').innerHTML=html;bindCards($('#evidence-body'),data.nodes);}catch(e){$('#evidence-body').textContent=e.message;}}
+let contextTrail=[],contextCurrent=null,contextRequest=0;
+function lineDetails(n){
+  let html=n.passiveCheck?`<p class="passive-check">Passive ${escapeHTML(n.passiveCheck.skill)} check · approximately ${n.passiveCheck.estimatedSkill} skill required</p>`:'';
+  if(n.conditions)html+=`<details><summary>Conditions for this line</summary><pre>${escapeHTML(n.conditions)}</pre></details>`;
+  const alternatives=JSON.parse(n.alternates||'[]');
+  if(alternatives.length)html+=`<details><summary>Alternate lines (${alternatives.length})</summary>${alternatives.map(a=>`<p class="dialogue-text">${escapeHTML(a.text)}</p><pre>${escapeHTML(a.condition)}</pre>`).join('')}</details>`;
+  if(n.checks?.length)html+=`<details><summary>Skill checks & modifiers</summary><pre>${escapeHTML(JSON.stringify({checks:n.checks,modifiers:n.modifiers},null,2))}</pre></details>`;
+  if(n.script)html+=`<details><summary>Effects of this line</summary><pre>${escapeHTML(n.script)}</pre></details>`;
+  return html;
+}
+async function openContext(id,back=false){
+  const d=$('#evidence-dialog'),request=++contextRequest;
+  if(!d.open){contextTrail=[];contextCurrent=null;d.showModal();}
+  if(!back&&contextCurrent&&contextCurrent!==id)contextTrail.push(contextCurrent);
+  contextCurrent=id;$('#evidence-title').textContent='Source '+id;$('#evidence-body').textContent='Following dialogue links…';
+  try{
+    const data=await api('context',{nodeId:id,depth:1,includeBranch:true});if(request!==contextRequest)return;
+    const branch=data.branch,center=data.center,parents=new Set(data.edges.filter(e=>e.to===id).map(e=>e.from));
+    const prior=data.nodes.filter(n=>parents.has(n.id)&&n.id!==id);
+    let html=contextTrail.length?'<button class="text-button" id="context-back">'+icon('chevron-up')+' Previous branch</button>':'';
+    html+='<p class="dialog-note">Following database links in order. Conditions and skill checks are shown for reference; your game state is not applied.</p>';
+    if(branch.sequence.length)html+=branch.sequence.map(n=>`<section class="branch-line">${card(n,n.id===id)}${lineDetails(n)}</section>`).join('');
+    else html+=card(center,true);
+    if(branch.choices.length){
+      html+=`<div class="section-heading"><h2>${branch.stop==='choices'?'Next dialogue choices':'Possible continuations'}</h2><span>${escapeHTML(branch.choicePoint.id)}</span></div><ol class="dialogue-choices">`+branch.choices.map(n=>`<li><button class="dialogue-choice" data-context="${escapeHTML(n.id)}"><span class="choice-speaker">${escapeHTML(n.speaker==='HUB'?'Choice point':n.speaker)} · ${escapeHTML(n.id)}</span><span>${escapeHTML(n.structural?'Continue to dialogue choices':n.text||'Continue')}</span></button>${lineDetails(n)}</li>`).join('')+'</ol>';
+    }else html+=`<p class="dialog-note">${({end:'End of this dialogue branch.',cycle:'This branch loops back to an earlier line.',limit:'Sequence paused after 100 linked nodes.',missing:'The next linked line is unavailable.'})[branch.stop]||'End of this dialogue branch.'}</p>`;
+    if(branch.stop==='cycle'||branch.stop==='limit')html+='<button class="text-button" data-context="'+escapeHTML(branch.continueAt)+'">Continue from '+escapeHTML(branch.continueAt)+'</button>';
+    if(prior.length)html+=`<details><summary>Leads into this line · ${prior.length} links</summary>${prior.map(n=>card(n)).join('')}</details>`;
+    $('#evidence-body').innerHTML=html;bindCards($('#evidence-body'),[...data.nodes,...branch.sequence,...branch.choices]);
+    if($('#context-back'))$('#context-back').onclick=()=>openContext(contextTrail.pop(),true);
+    d.scrollTop=0;
+  }catch(e){if(request===contextRequest)$('#evidence-body').textContent=e.message;}
+}
+
 function renderAnswer(text){return renderMarkdown(text);}
 async function streamArchive(payload){
   const response=await fetch('/api/research/stream',{method:'POST',headers:{'Content-Type':'application/json','Accept':'text/event-stream'},body:JSON.stringify(payload)});

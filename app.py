@@ -155,7 +155,40 @@ def meaningful_dialogue(n):
     text=(n['text'] or '')+' '+ ' '.join(a.get('text') or '' for a in json.loads(n['alternates'] or '[]'))
     return bool(re.search(r'[^\W\d_]',text,re.UNICODE)) and n['speaker']!='HUB'
 
-def context(node_id, depth=1):
+def dialogue_branch(node_id, max_lines=100):
+    """Follow deterministic links; expose forks without evaluating game state."""
+    sequence=[]; seen=set(); choices=[]; stop='end'; choice_point=None
+    with source() as s, db() as graph:
+        def entry(ident):
+            n=node(ident)
+            if not n:return None
+            conv,line=map(int,ident.split(':'))
+            row=s.execute('SELECT isgroup,userscript,difficultypass FROM dentries WHERE conversationid=? AND id=?',(conv,line)).fetchone()
+            n['structural']=bool(row['isgroup']) if row else n['speaker'].strip().upper()=='HUB'
+            n['script']=row['userscript'] or '' if row else ''
+            difficulty=row['difficultypass'] if row else 0
+            n['passiveCheck']={'skill':n['speaker'],'estimatedSkill':(difficulty-7)*2-1 if difficulty>7 else difficulty*2} if difficulty else None
+            n['checks']=[dict(r) for r in s.execute('SELECT * FROM checks WHERE conversationid=? AND dialogueid=?',(conv,line))]
+            n['modifiers']=[dict(r) for r in s.execute('SELECT * FROM modifiers WHERE conversationid=? AND dialogueid=?',(conv,line))]
+            return n
+        current=node_id
+        for _ in range(min(max(int(max_lines),1),100)):
+            if current in seen:stop='cycle';break
+            seen.add(current);n=entry(current)
+            if not n:stop='missing';break
+            if not n['structural']:sequence.append(n)
+            conv,line=map(int,current.split(':'))
+            links=graph.execute('SELECT * FROM edges WHERE originconversationid=? AND origindialogueid=? ORDER BY rowid',(conv,line)).fetchall()
+            destinations=list(dict.fromkeys(f"{r['destinationconversationid']}:{r['destinationdialogueid']}" for r in links))
+            if len(destinations)>1:
+                choices=[item for dest in destinations if (item:=entry(dest))]
+                choice_point=n;stop='choices' if n['structural'] else 'fork';break
+            if not destinations:break
+            current=destinations[0]
+        else:stop='limit'
+    return {'sequence':sequence,'choices':choices,'choicePoint':choice_point,'stop':stop,'continueAt':current if stop in ('cycle','limit') else None}
+
+def context(node_id, depth=1, includeBranch=False):
     center=node(node_id)
     if not center: raise ValueError('Dialogue not found.')
     seen={node_id}; frontier=[node_id]; edges=[]
@@ -173,7 +206,9 @@ def context(node_id, depth=1):
         conv,line=map(int,node_id.split(':'))
         checks=[dict(r) for r in s.execute('SELECT * FROM checks WHERE conversationid=? AND dialogueid=?',(conv,line))]
         modifiers=[dict(r) for r in s.execute('SELECT * FROM modifiers WHERE conversationid=? AND dialogueid=?',(conv,line))]
-    return {'center':center,'nodes':[n for key in sorted(seen) if (n:=node(key))], 'edges':edges,'checks':checks,'modifiers':modifiers}
+    result={'center':center,'nodes':[n for key in sorted(seen) if (n:=node(key))], 'edges':edges,'checks':checks,'modifiers':modifiers}
+    if includeBranch:result['branch']=dialogue_branch(node_id)
+    return result
 
 def provider(config, endpoint, payload=None):
     if not config.get('baseUrl'): raise ValueError('Set the provider URL in Settings first.')
@@ -545,7 +580,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(200);self.send_header('Set-Cookie',f'minnie={TOKEN}; HttpOnly; SameSite=Strict; Path=/');self.end_headers();return
             if not self.authorized():return self.respond({'error':'Access code required.'},401)
             if self.path=='/api/search': return self.respond(search(**payload))
-            if self.path=='/api/context': return self.respond(context(payload['nodeId'],payload.get('depth',1)))
+            if self.path=='/api/context': return self.respond(context(payload['nodeId'],payload.get('depth',1),bool(payload.get('includeBranch',False))))
             if self.path=='/api/research': return self.respond(self.persistent_research(payload))
             if self.path=='/api/research/stream':return self.stream_research(payload)
             if self.path=='/api/sql': return self.respond(readonly_sql(payload['sql']))
