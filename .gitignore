@@ -1,0 +1,27 @@
+# Local credentials, chats, generated indexes and vectors
+/data/
+.env
+.env.*
+!.env.example
+
+# Python and JavaScript caches
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+node_modules/
+.npm-cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local previews and duplicate source archives
+/previews/
+/*.zip
+
+# Logs and editor/OS files
+*.log
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
