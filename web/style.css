@@ -17,3 +17,15 @@
 #research-options-body .tool-group select,#research-options-body .filters select{display:block;width:100%;max-width:none;min-height:44px;padding:10px 28px 10px 11px;font-size:14px;overflow:hidden;text-overflow:ellipsis;margin:0}
 #research-options-body .filter-note{grid-column:1/-1;border-top:1px solid var(--line);padding-top:14px;margin:3px 0 0;line-height:1.6;font-size:11px}
 @media(max-width:440px){#research-options-dialog{padding:22px 18px}#research-options-body .filters{grid-template-columns:minmax(0,1fr);gap:16px}#research-options-body .tool-group{gap:12px}#research-options-body .options-section+.options-section{padding-top:20px;margin-top:22px}}
+
+#chat-list{border-top:1px solid #3b3d37}
+.library-chat{padding:13px 12px 10px;margin:0;border-bottom:1px solid #3b3d37;border-radius:3px}
+.library-chat:hover,.library-chat:focus-within{background:#252724}
+.library-chat .chat-name{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;width:100%;padding:0;font:16px/1.45 Georgia,serif;color:var(--accent);text-align:left}
+.library-chat .chat-name:hover{color:#98998e}
+.library-chat .dialog-note{margin:5px 0 4px;font-size:12px;line-height:1.5}
+.library-chat .library-row-actions{gap:16px;align-items:center;flex-wrap:wrap}
+.library-chat .library-row-actions .text-button{font-size:12px;padding:7px 0;min-height:44px}
+.library-chat .library-row-actions label{margin:0 0 0 auto;width:auto;max-width:160px}
+.library-chat .library-row-actions select{margin:0;width:160px;max-width:100%;font-size:12px;min-height:44px;padding:8px 26px 8px 10px;background:transparent;border-color:#383b35}
+@media(max-width:440px){.library-chat{padding:12px 9px 10px}.library-chat .library-row-actions{gap:0 16px}.library-chat .library-row-actions label{flex-basis:100%;max-width:none;margin-left:0}.library-chat .library-row-actions select{width:100%}.library-chat .chat-name{font-size:16px}}
