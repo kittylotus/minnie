@@ -28,3 +28,22 @@ export function renderMarkdown(text,{citations=true}={}){
   }
   return holder.innerHTML;
 }
+
+export function evidenceInFolder(items,folder){return items.filter(n=>folder==='all'||(n.folderId||'')===folder);}
+export function evidenceForExport(items,folder,selected){const rows=evidenceInFolder(items,folder);return selected.size?rows.filter(n=>selected.has(n.id)):rows;}
+export function moveEvidenceItems(items,ids,folderId){return items.map(n=>ids.has(n.id)?{...n,folderId}:n);}
+export function unfileEvidenceFolder(items,folderId){return items.map(n=>n.folderId===folderId?{...n,folderId:''}:n);}
+export function contextPlainText(root){
+  const blocks=new Set(['P','DIV','ARTICLE','SECTION','DETAILS','SUMMARY','OL','LI','H2']);
+  function read(n){
+    if(n.nodeType===3)return n.nodeValue;
+    if(n.nodeType!==1)return '';
+    if(n.matches('svg,script,style,.card-actions button,#context-back'))return '';
+    const text=[...n.childNodes].map(read).join('');
+    if(n.matches('.card-top'))return [...n.children].map(read).join(' · ')+'\n\n';
+    if(n.matches('.choice-speaker'))return text+'\n\n';
+    if(n.tagName==='BR')return '\n';
+    return blocks.has(n.tagName)?'\n\n'+text+'\n\n':text;
+  }
+  return read(root).replace(/[ \t]+\n/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
+}

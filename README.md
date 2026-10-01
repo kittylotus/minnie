@@ -34,7 +34,9 @@ The agent can search, expand graph context, inspect a conversation (up to 200 li
 
 Saved evidence, reading size, line spacing, and brightness live in this browser's local storage. They are not synchronized between desktop and phone. The subdued default palette is intentional and follows the supplied accessibility references.
 
-In **Saved evidence**, use **Copy as Markdown** to paste the evidence locker into an LLM or **Download .md** to save `minnie-evidence.md`. Exports group saved snippets by conversation, include speaker names and composite source IDs, and separate conversations with `- - -`. Conversation groups and their snippets retain their order from the evidence shelf; original dialogue text is preserved. If automatic clipboard access is blocked (including some mobile HTTP browsers), a selectable text dialog provides a manual-copy fallback. Export stays on your device and does not call a model.
+In **Saved evidence**, use **New folder** to organize snippets. Existing saved evidence remains in Unfiled. Choose **Select**, check snippets (or **Select all in this view**), then move them to a folder or remove them together. Bulk removal asks for confirmation and offers **Undo remove**, which remains available after a reload until used or replaced by another bulk removal. Folders can be renamed or deleted; deleting a folder moves its evidence to Unfiled. Organization remains local to this browser, like the evidence itself.
+
+Use **Copy as Markdown** to paste the evidence locker into an LLM or **Download .md** to save `minnie-evidence.md`. Exports use selected snippets, or all snippets in the current folder view when nothing is selected. They group snippets by conversation, include speaker names and composite source IDs, and separate conversations with `- - -`. Conversation groups and their snippets retain their order from the evidence shelf; original dialogue text is preserved. If automatic clipboard access is blocked (including some mobile HTTP browsers), a selectable text dialog provides a manual-copy fallback. Export stays on your device and does not call a model.
 
 ## Research chats
 
@@ -50,6 +52,8 @@ Answers render Markdown while reasoning remains plain text. Markdown supports he
 
 **Open dialogue context** follows outgoing database links in order, showing the spoken exchange until the next choice point. Select a dialogue choice to continue, or use **Previous branch** to go back. Structural HUB records are labeled as dialogue choice points instead of showing their placeholder `0`. Conditions, alternate lines, script effects, active checks and estimated passive skill requirements remain available. Minnie does not simulate your game state: conditional forks are shown as possible continuations, not silently chosen. Cycles and sequences longer than 100 linked nodes pause with an explicit continuation link.
 
+**Copy context** copies the full text loaded in this modal, including the dialogue sequence, next choices, source IDs, and text inside collapsed conditions, alternates, effects and incoming-link sections. Action-button labels are omitted. It uses the same manual-copy fallback if clipboard access is unavailable.
+
 ## First semantic index
 
 In **Settings → Embeddings**, enter your embedding provider's `/v1` base URL and API key, load models, and choose an embedding-capable model. Save that provider and use **Ping embedding provider** to verify it. Then select **Build semantic index** and keep Minnie running until it finishes. Interrupted builds resume when started again. Use the same provider URL and model for later searches. The app prepares its SQLite index automatically; no manual database conversion is needed. Building the index sends dialogue to the provider and may incur usage charges. Answer-model settings are separate.
@@ -62,4 +66,10 @@ In **Settings → Embeddings**, enter your embedding provider's `/v1` base URL a
 
 ```powershell
 python -m unittest discover -s tests -v
+```
+
+For evidence organization and export checks (requires Node.js):
+
+```powershell
+node tests/test_evidence.mjs
 ```

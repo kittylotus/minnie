@@ -1,5 +1,5 @@
 import {icon} from './icons.js';
-import {renderMarkdown,evidenceMarkdown} from './markdown.js';
+import {renderMarkdown,evidenceMarkdown,evidenceInFolder,evidenceForExport,moveEvidenceItems,unfileEvidenceFolder,contextPlainText} from './markdown.js';
 const $=s=>document.querySelector(s);
 const escapeHTML=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let view='research',busy=false,status={},poll;
@@ -10,6 +10,12 @@ const optionsDialog=document.createElement('dialog');optionsDialog.id='research-
 document.body.append(optionsDialog);optionsDialog.querySelector('.close').onclick=()=>optionsDialog.close();
 const optionsButton=document.createElement('button');optionsButton.type='button';optionsButton.id='research-options';optionsButton.hidden=true;optionsButton.setAttribute('aria-label','Open research options');optionsButton.setAttribute('aria-haspopup','dialog');optionsButton.innerHTML=icon('chevron-up');$('#submit').before(optionsButton);optionsButton.onclick=()=>optionsDialog.showModal();
 let saved=JSON.parse(localStorage.getItem('minnie-evidence')||'[]');
+let evidenceFolders=JSON.parse(localStorage.getItem('minnie-evidence-folders')||'[]'),evidenceTrash=JSON.parse(localStorage.getItem('minnie-evidence-trash')||'[]');
+let evidenceFolder='all',evidenceSelecting=false,evidenceSelected=new Set();
+function persistEvidence(){localStorage.setItem('minnie-evidence',JSON.stringify(saved));localStorage.setItem('minnie-evidence-folders',JSON.stringify(evidenceFolders));}
+function visibleEvidence(){return evidenceInFolder(saved,evidenceFolder);}
+function exportEvidence(){return evidenceForExport(saved,evidenceFolder,evidenceSelected);}
+
 let reading=JSON.parse(localStorage.getItem('minnie-reading')||'{"brightness":112,"size":19,"spacing":18}');
 function applyReading(){const b=reading.brightness;document.documentElement.style.setProperty('--text',`rgb(${b},${b+2},${b-3})`);document.documentElement.style.setProperty('--body-size',reading.size+'px');document.documentElement.style.setProperty('--leading',reading.spacing/10);$('#brightness').value=b;$('#font-size').value=reading.size;$('#line-spacing').value=reading.spacing;}
 applyReading();
@@ -87,11 +93,53 @@ async function showLibrary(){try{await refreshLibrary();$('#library-feedback').t
 $('#chats-open').onclick=showLibrary;$('#chat-organize').onclick=showLibrary;$('#new-chat').onclick=newChat;
 $('#folder-filter').onchange=e=>{folderFilter=e.target.value;renderLibrary();};
 $('#create-folder').onclick=()=>askName('createFolder',null,'New folder');
-$('#name-form').onsubmit=async e=>{e.preventDefault();try{const result=await api('chats/manage',{...nameAction,name:$('#item-name').value});if(nameAction.action==='createFolder')folderFilter=result.id;$('#name-dialog').close();await refreshLibrary();if(currentChat){currentChat.title=library.chats.find(c=>c.id===currentChatId)?.title||currentChat.title;$('#chat-title').textContent=currentChat.title;}}catch(e){$('#name-error').textContent=e.message;}};
+$('#name-form').onsubmit=async e=>{e.preventDefault();try{if(nameAction.action.startsWith('evidence')){evidenceName(nameAction,$('#item-name').value);$('#name-dialog').close();return;}const result=await api('chats/manage',{...nameAction,name:$('#item-name').value});if(nameAction.action==='createFolder')folderFilter=result.id;$('#name-dialog').close();await refreshLibrary();if(currentChat){currentChat.title=library.chats.find(c=>c.id===currentChatId)?.title||currentChat.title;$('#chat-title').textContent=currentChat.title;}}catch(e){$('#name-error').textContent=e.message;}};
 $('#delete-cancel').onclick=()=>$('#delete-dialog').close();
-$('#delete-confirm').onclick=async()=>{try{await libraryAction(deleteAction);$('#delete-dialog').close();}catch(e){$('#delete-error').textContent=e.message;}};
+$('#delete-confirm').onclick=async()=>{try{if(deleteAction.action.startsWith('evidence')){evidenceDelete(deleteAction);$('#delete-dialog').close();return;}await libraryAction(deleteAction);$('#delete-dialog').close();}catch(e){$('#delete-error').textContent=e.message;}};
 function bindCards(container,nodes){nodes.forEach(n=>records.set(n.id,n));container.querySelectorAll('[data-context]').forEach(b=>b.onclick=()=>openContext(b.dataset.context));container.querySelectorAll('[data-save]').forEach(b=>b.onclick=()=>{const id=b.dataset.save;const exists=saved.some(n=>n.id===id);saved=exists?saved.filter(n=>n.id!==id):[...saved,records.get(id)];localStorage.setItem('minnie-evidence',JSON.stringify(saved));b.innerHTML=exists?'Save evidence':icon('check')+' Saved';if(view==='saved')renderSaved();});}
-function renderSaved(){$('#copy-evidence').disabled=$('#download-evidence').disabled=!saved.length;$('#evidence-export-status').textContent='';$('#saved-list').innerHTML=saved.length?saved.map(n=>card(n)).join(''):'<p class="empty">Your shelf is empty. Save a line from a search or a source citation.</p>';bindCards($('#saved-list'),saved);}
+function renderSaved(){
+  const rows=visibleEvidence(),ids=new Set(rows.map(n=>n.id));evidenceSelected=new Set([...evidenceSelected].filter(id=>ids.has(id)));
+  const filter=$('#evidence-folder-filter');filter.replaceChildren(new Option('All evidence','all'),new Option('Unfiled',''));
+  for(const folder of evidenceFolders)filter.add(new Option(folder.name,folder.id));filter.value=evidenceFolder;
+  const move=$('#evidence-move-folder'),target=move.value;move.replaceChildren(new Option('Unfiled',''));
+  for(const folder of evidenceFolders)move.add(new Option(folder.name,folder.id));if([...move.options].some(o=>o.value===target))move.value=target;
+  $('#evidence-folder-actions').hidden=!evidenceFolders.some(f=>f.id===evidenceFolder);
+  $('#evidence-bulk').hidden=!evidenceSelecting;$('#evidence-select').textContent=evidenceSelecting?'Done':'Select';
+  $('#evidence-undo').hidden=!evidenceTrash.length;$('#evidence-export-status').textContent='';
+  $('#saved-list').innerHTML=rows.length?rows.map(n=>`<div class="saved-evidence-row ${evidenceSelected.has(n.id)?'selected':''}">${evidenceSelecting?`<label class="evidence-check"><input type="checkbox" data-evidence-select="${escapeHTML(n.id)}" ${evidenceSelected.has(n.id)?'checked':''}><span class="sr-only">Select source ${escapeHTML(n.id)}, ${escapeHTML(n.speaker)}</span></label>`:''}${card(n)}</div>`).join(''):'<p class="empty">'+(saved.length?'No evidence in this folder yet. Select snippets in All evidence to move them here.':'Your shelf is empty. Save a line from a search or a source citation.')+'</p>';
+  bindCards($('#saved-list'),rows);
+  $('#saved-list').querySelectorAll('[data-evidence-select]').forEach(input=>input.onchange=()=>{if(input.checked)evidenceSelected.add(input.dataset.evidenceSelect);else evidenceSelected.delete(input.dataset.evidenceSelect);input.closest('.saved-evidence-row').classList.toggle('selected',input.checked);updateEvidenceSelection();});
+  updateEvidenceSelection();
+}
+function updateEvidenceSelection(){
+  const rows=visibleEvidence(),count=evidenceSelected.size;
+  $('#evidence-selection-count').textContent=`${count} selected`;
+  const all=$('#evidence-select-all');all.checked=!!rows.length&&count===rows.length;all.indeterminate=count>0&&count<rows.length;all.disabled=!rows.length;
+  $('#evidence-move').disabled=$('#evidence-remove').disabled=!count;
+  $('#copy-evidence').disabled=$('#download-evidence').disabled=!exportEvidence().length;
+  $('#copy-evidence').textContent=count?'Copy selected as Markdown':'Copy as Markdown';$('#download-evidence').textContent=count?'Download selected .md':'Download .md';
+}
+$('#evidence-folder-filter').onchange=e=>{evidenceFolder=e.target.value;evidenceSelected.clear();renderSaved();};
+$('#evidence-select').onclick=()=>{evidenceSelecting=!evidenceSelecting;if(!evidenceSelecting)evidenceSelected.clear();renderSaved();};
+$('#evidence-select-all').onchange=e=>{evidenceSelected=e.target.checked?new Set(visibleEvidence().map(n=>n.id)):new Set();renderSaved();};
+$('#evidence-create-folder').onclick=()=>askName('evidenceCreateFolder',null,'New evidence folder');
+$('#evidence-rename-folder').onclick=()=>{const f=evidenceFolders.find(f=>f.id===evidenceFolder);if(f)askName('evidenceRenameFolder',f.id,'Rename evidence folder',f.name);};
+$('#evidence-delete-folder').onclick=()=>{const f=evidenceFolders.find(f=>f.id===evidenceFolder);if(f){deleteAction={action:'evidenceDeleteFolder',id:f.id};$('#delete-description').textContent=`Delete folder “${f.name}”? Its evidence will move to Unfiled.`;$('#delete-error').textContent='';$('#delete-dialog').showModal();}};
+$('#evidence-move').onclick=()=>{const target=$('#evidence-move-folder').value;saved=moveEvidenceItems(saved,evidenceSelected,target);persistEvidence();evidenceSelected.clear();renderSaved();$('#evidence-export-status').textContent='Evidence moved.';};
+$('#evidence-remove').onclick=()=>{deleteAction={action:'evidenceRemove',ids:[...evidenceSelected]};$('#delete-description').textContent=`Remove ${evidenceSelected.size} selected snippets from the evidence shelf? You can undo this removal.`;$('#delete-error').textContent='';$('#delete-dialog').showModal();};
+$('#evidence-undo-remove').onclick=()=>{const ids=new Set(saved.map(n=>n.id));saved=[...saved,...evidenceTrash.filter(n=>!ids.has(n.id)).map(n=>({...n,folderId:evidenceFolders.some(f=>f.id===n.folderId)?n.folderId:''}))];persistEvidence();evidenceTrash=[];localStorage.setItem('minnie-evidence-trash','[]');evidenceFolder='all';renderSaved();$('#evidence-export-status').textContent='Removed evidence restored.';};
+function evidenceName(action,name){
+  name=name.trim();if(!name)throw Error('Enter a folder name.');
+  if(action.action==='evidenceCreateFolder'){const id='evidence-'+(crypto.randomUUID?.()||Date.now().toString(36)+'-'+Math.random().toString(36).slice(2));evidenceFolders.push({id,name});evidenceFolder=id;}
+  else{const f=evidenceFolders.find(f=>f.id===action.id);if(!f)throw Error('Folder not found.');f.name=name;}
+  persistEvidence();evidenceSelected.clear();renderSaved();
+}
+function evidenceDelete(action){
+  if(action.action==='evidenceDeleteFolder'){saved=unfileEvidenceFolder(saved,action.id);evidenceFolders=evidenceFolders.filter(f=>f.id!==action.id);evidenceFolder='';}
+  else{const ids=new Set(action.ids);evidenceTrash=saved.filter(n=>ids.has(n.id));localStorage.setItem('minnie-evidence-trash',JSON.stringify(evidenceTrash));saved=saved.filter(n=>!ids.has(n.id));}
+  persistEvidence();evidenceSelected.clear();renderSaved();
+}
+
 let contextTrail=[],contextCurrent=null,contextRequest=0;
 function lineDetails(n){
   let html=n.passiveCheck?`<p class="passive-check">Passive ${escapeHTML(n.passiveCheck.skill)} check · approximately ${n.passiveCheck.estimatedSkill} skill required</p>`:'';
@@ -102,23 +150,28 @@ function lineDetails(n){
   if(n.script)html+=`<details><summary>Effects of this line</summary><pre>${escapeHTML(n.script)}</pre></details>`;
   return html;
 }
+function manualCopy(text){$('#evidence-export-text').value=text;$('#copy-evidence-dialog').showModal();$('#evidence-export-text').focus();$('#evidence-export-text').select();}
+$('#copy-dialogue-context').onclick=async()=>{
+  const text=$('#evidence-title').textContent+'\n\n'+contextPlainText($('#evidence-body'));
+  try{if(!navigator.clipboard?.writeText)throw Error('Clipboard unavailable');await navigator.clipboard.writeText(text);$('#context-copy-status').textContent='Full dialogue context copied.';}
+  catch{manualCopy(text);$('#context-copy-status').textContent='Context is ready for manual copying.';}
+};
 $('#copy-evidence').onclick=async()=>{
-  if(!saved.length)return;
-  const text=evidenceMarkdown(saved),message=$('#evidence-export-status');
+  const items=exportEvidence();if(!items.length)return;
+  const text=evidenceMarkdown(items),message=$('#evidence-export-status');
   try{
     if(!navigator.clipboard?.writeText)throw Error('Clipboard unavailable');
     await navigator.clipboard.writeText(text);
-    message.textContent=`Copied ${saved.length} saved ${saved.length===1?'line':'lines'} as Markdown.`;
+    message.textContent=`Copied ${items.length} saved ${items.length===1?'line':'lines'} as Markdown.`;
   }catch{
-    $('#evidence-export-text').value=text;$('#copy-evidence-dialog').showModal();
-    $('#evidence-export-text').focus();$('#evidence-export-text').select();
+    manualCopy(text);
     message.textContent='Markdown is ready for manual copying. Download .md is also available.';
   }
 };
 $('#select-evidence-text').onclick=()=>{$('#evidence-export-text').focus();$('#evidence-export-text').select();};
 $('#download-evidence').onclick=()=>{
-  if(!saved.length)return;
-  const blob=new Blob([evidenceMarkdown(saved)],{type:'text/markdown;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+  const items=exportEvidence();if(!items.length)return;
+  const blob=new Blob([evidenceMarkdown(items)],{type:'text/markdown;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');
   a.href=url;a.download='minnie-evidence.md';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);
   $('#evidence-export-status').textContent='Markdown download started.';
 };
@@ -126,7 +179,7 @@ async function openContext(id,back=false){
   const d=$('#evidence-dialog'),request=++contextRequest;
   if(!d.open){contextTrail=[];contextCurrent=null;d.showModal();}
   if(!back&&contextCurrent&&contextCurrent!==id)contextTrail.push(contextCurrent);
-  contextCurrent=id;$('#evidence-title').textContent='Source '+id;$('#evidence-body').textContent='Following dialogue links…';
+  contextCurrent=id;$('#evidence-title').textContent='Source '+id;$('#context-copy-status').textContent='';$('#copy-dialogue-context').disabled=true;$('#evidence-body').textContent='Following dialogue links…';
   try{
     const data=await api('context',{nodeId:id,depth:1,includeBranch:true});if(request!==contextRequest)return;
     const branch=data.branch,center=data.center,parents=new Set(data.edges.filter(e=>e.to===id).map(e=>e.from));
@@ -142,7 +195,7 @@ async function openContext(id,back=false){
     if(prior.length)html+=`<details><summary>Leads into this line · ${prior.length} links</summary>${prior.map(n=>card(n)).join('')}</details>`;
     $('#evidence-body').innerHTML=html;bindCards($('#evidence-body'),[...data.nodes,...branch.sequence,...branch.choices]);
     if($('#context-back'))$('#context-back').onclick=()=>openContext(contextTrail.pop(),true);
-    d.scrollTop=0;
+    $('#copy-dialogue-context').disabled=false;d.scrollTop=0;
   }catch(e){if(request===contextRequest)$('#evidence-body').textContent=e.message;}
 }
 
