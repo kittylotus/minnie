@@ -6,7 +6,7 @@ let view='research',busy=false,status={},poll;
 let currentChatId=null,currentChat=null,library={chats:[],folders:[]},folderFilter='all',nameAction=null,deleteAction=null;
 const composerDock=document.createElement('div');composerDock.id='composer-dock';composerDock.hidden=true;document.querySelector('main').append(composerDock);
 const dockResize=new ResizeObserver(()=>{document.documentElement.style.setProperty('--composer-height',composerDock.hidden?'0px':composerDock.getBoundingClientRect().height+'px');});dockResize.observe(composerDock);
-const optionsDialog=document.createElement('dialog');optionsDialog.id='research-options-dialog';optionsDialog.innerHTML='<div class="dialog-top"><h2>Research options</h2><button type="button" class="close" aria-label="Close research options">'+icon('x')+'</button></div><div id="research-options-body"></div>';
+const optionsDialog=document.createElement('dialog');optionsDialog.id='research-options-dialog';optionsDialog.innerHTML='<div class="dialog-top"><h2>Research options</h2><button type="button" class="close" aria-label="Close research options">'+icon('x')+'</button></div><div id="research-options-body"><section class="options-section" aria-labelledby="answer-options-heading"><h3 id="answer-options-heading">Answer settings</h3><div id="answer-options"></div></section><section class="options-section" aria-labelledby="source-options-heading"><h3 id="source-options-heading">Source filters</h3><div id="source-options"></div></section></div>';
 document.body.append(optionsDialog);optionsDialog.querySelector('.close').onclick=()=>optionsDialog.close();
 const optionsButton=document.createElement('button');optionsButton.type='button';optionsButton.id='research-options';optionsButton.hidden=true;optionsButton.setAttribute('aria-label','Open research options');optionsButton.setAttribute('aria-haspopup','dialog');optionsButton.innerHTML=icon('chevron-up');$('#submit').before(optionsButton);optionsButton.onclick=()=>optionsDialog.showModal();
 let saved=JSON.parse(localStorage.getItem('minnie-evidence')||'[]');
@@ -53,7 +53,7 @@ function conversationLayout(active){
   optionsButton.hidden=!docked;
   $('.tabs').hidden=view==='saved'||docked;
   $('#query').rows=docked?1:3;$('#query').style.height='';$('#submit').textContent=docked?'Send':view==='search'?'Search':'Research';$('#chat-organize').textContent=docked?'Organize':'Organize chats';
-  if(docked){output.before(question);composerDock.append(form,status);$('#research-options-body').append($('.tool-group'),filters);$('#query').placeholder='Ask a follow-up…';}
+  if(docked){output.before(question);composerDock.append(form,status);$('#answer-options').append($('.tool-group'));$('#source-options').append(filters);$('#query').placeholder='Ask a follow-up…';}
   else{if(optionsDialog.open)optionsDialog.close();$('.query-tools').prepend($('.tool-group'));$('#chat-history').after(form);form.after(filters);filters.after(question);question.after(status);status.after(output);}
   document.documentElement.style.setProperty('--composer-height',docked?composerDock.getBoundingClientRect().height+'px':'0px');
 }
