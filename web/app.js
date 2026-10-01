@@ -1,5 +1,5 @@
 import {icon} from './icons.js';
-import {renderMarkdown} from './markdown.js';
+import {renderMarkdown,evidenceMarkdown} from './markdown.js';
 const $=s=>document.querySelector(s);
 const escapeHTML=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let view='research',busy=false,status={},poll;
@@ -91,7 +91,7 @@ $('#name-form').onsubmit=async e=>{e.preventDefault();try{const result=await api
 $('#delete-cancel').onclick=()=>$('#delete-dialog').close();
 $('#delete-confirm').onclick=async()=>{try{await libraryAction(deleteAction);$('#delete-dialog').close();}catch(e){$('#delete-error').textContent=e.message;}};
 function bindCards(container,nodes){nodes.forEach(n=>records.set(n.id,n));container.querySelectorAll('[data-context]').forEach(b=>b.onclick=()=>openContext(b.dataset.context));container.querySelectorAll('[data-save]').forEach(b=>b.onclick=()=>{const id=b.dataset.save;const exists=saved.some(n=>n.id===id);saved=exists?saved.filter(n=>n.id!==id):[...saved,records.get(id)];localStorage.setItem('minnie-evidence',JSON.stringify(saved));b.innerHTML=exists?'Save evidence':icon('check')+' Saved';if(view==='saved')renderSaved();});}
-function renderSaved(){$('#saved-list').innerHTML=saved.length?saved.map(n=>card(n)).join(''):'<p class="empty">Your shelf is empty. Save a line from a search or a source citation.</p>';bindCards($('#saved-list'),saved);}
+function renderSaved(){$('#copy-evidence').disabled=$('#download-evidence').disabled=!saved.length;$('#evidence-export-status').textContent='';$('#saved-list').innerHTML=saved.length?saved.map(n=>card(n)).join(''):'<p class="empty">Your shelf is empty. Save a line from a search or a source citation.</p>';bindCards($('#saved-list'),saved);}
 let contextTrail=[],contextCurrent=null,contextRequest=0;
 function lineDetails(n){
   let html=n.passiveCheck?`<p class="passive-check">Passive ${escapeHTML(n.passiveCheck.skill)} check · approximately ${n.passiveCheck.estimatedSkill} skill required</p>`:'';
@@ -102,6 +102,26 @@ function lineDetails(n){
   if(n.script)html+=`<details><summary>Effects of this line</summary><pre>${escapeHTML(n.script)}</pre></details>`;
   return html;
 }
+$('#copy-evidence').onclick=async()=>{
+  if(!saved.length)return;
+  const text=evidenceMarkdown(saved),message=$('#evidence-export-status');
+  try{
+    if(!navigator.clipboard?.writeText)throw Error('Clipboard unavailable');
+    await navigator.clipboard.writeText(text);
+    message.textContent=`Copied ${saved.length} saved ${saved.length===1?'line':'lines'} as Markdown.`;
+  }catch{
+    $('#evidence-export-text').value=text;$('#copy-evidence-dialog').showModal();
+    $('#evidence-export-text').focus();$('#evidence-export-text').select();
+    message.textContent='Markdown is ready for manual copying. Download .md is also available.';
+  }
+};
+$('#select-evidence-text').onclick=()=>{$('#evidence-export-text').focus();$('#evidence-export-text').select();};
+$('#download-evidence').onclick=()=>{
+  if(!saved.length)return;
+  const blob=new Blob([evidenceMarkdown(saved)],{type:'text/markdown;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+  a.href=url;a.download='minnie-evidence.md';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);
+  $('#evidence-export-status').textContent='Markdown download started.';
+};
 async function openContext(id,back=false){
   const d=$('#evidence-dialog'),request=++contextRequest;
   if(!d.open){contextTrail=[];contextCurrent=null;d.showModal();}

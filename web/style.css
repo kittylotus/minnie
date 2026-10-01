@@ -35,3 +35,5 @@
 .passive-check{font-size:12px;line-height:1.7;color:var(--muted);margin:8px 0}
 
 #context-back .icon{transform:rotate(-90deg)}
+
+.evidence-export-tools{display:flex;gap:12px;flex-wrap:wrap;margin:4px 0 14px}.evidence-export-tools button:disabled{cursor:default}#evidence-export-status{font-size:13px;line-height:1.7;color:var(--accent);margin:0 0 12px}#evidence-export-status:empty{display:none}#evidence-export-text{font:13px/1.7 Consolas,monospace;min-height:220px;margin:6px 0 14px;white-space:pre-wrap}@media(max-width:440px){.evidence-export-tools{gap:9px}.evidence-export-tools button{padding:10px 12px;font-size:13px}}

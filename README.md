@@ -34,6 +34,8 @@ The agent can search, expand graph context, inspect a conversation (up to 200 li
 
 Saved evidence, reading size, line spacing, and brightness live in this browser's local storage. They are not synchronized between desktop and phone. The subdued default palette is intentional and follows the supplied accessibility references.
 
+In **Saved evidence**, use **Copy as Markdown** to paste the evidence locker into an LLM or **Download .md** to save `minnie-evidence.md`. Exports group saved snippets by conversation, include speaker names and composite source IDs, and separate conversations with `- - -`. Conversation groups and their snippets retain their order from the evidence shelf; original dialogue text is preserved. If automatic clipboard access is blocked (including some mobile HTTP browsers), a selectable text dialog provides a manual-copy fallback. Export stays on your device and does not call a model.
+
 ## Research chats
 
 Archive responses are now conversations. Ask a follow-up in the composer beneath the answer; earlier questions, answers and cited evidence inform the next research pass. **New chat** starts a separate thread. All completed turns, reasoning, citations and research traces are saved in `data/chats.sqlite` on the host, independently of the disposable corpus index. The chat library is shared by browsers and phones connected to that same host. Each browser remembers its last open chat locally.
