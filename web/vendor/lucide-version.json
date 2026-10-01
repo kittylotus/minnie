@@ -1,0 +1,22 @@
+{
+  "package": "lucide-static",
+  "version": "1.49.0",
+  "source": "https://registry.npmjs.org/lucide-static/-/lucide-static-1.49.0.tgz",
+  "integrity": "sha512-gSjtl7bR2v26oDInh2Wua1PrF2BRRXl9inhnLWcFfnRqRShmgZvlFRisPHqTfU7kxsuZU8ThNjAFotbInrzKow==",
+  "icons": [
+    "sparkles",
+    "search",
+    "bookmark",
+    "folders",
+    "settings",
+    "type",
+    "book-open",
+    "x",
+    "chevron-up",
+    "pin",
+    "pin-off",
+    "check",
+    "pencil",
+    "trash-2"
+  ]
+}

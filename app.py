@@ -529,7 +529,7 @@ class Handler(BaseHTTPRequestHandler):
         if path=='/api/chats':
             if not self.authorized():return self.respond({'error':'Access code required.'},401)
             return self.respond(chat_list())
-        files={'/':('index.html','text/html; charset=utf-8'),'/app.js':('app.js','text/javascript; charset=utf-8'),'/markdown.js':('markdown.js','text/javascript; charset=utf-8'),'/vendor/marked.esm.js':('vendor/marked.esm.js','text/javascript; charset=utf-8'),'/vendor/purify.es.mjs':('vendor/purify.es.mjs','text/javascript; charset=utf-8'),'/style.css':('style.css','text/css; charset=utf-8'),'/favicon.svg':('favicon.svg','image/svg+xml')}
+        files={'/icons.js':('icons.js','text/javascript; charset=utf-8'),'/vendor/lucide.svg':('vendor/lucide.svg','image/svg+xml'),'/':('index.html','text/html; charset=utf-8'),'/app.js':('app.js','text/javascript; charset=utf-8'),'/markdown.js':('markdown.js','text/javascript; charset=utf-8'),'/vendor/marked.esm.js':('vendor/marked.esm.js','text/javascript; charset=utf-8'),'/vendor/purify.es.mjs':('vendor/purify.es.mjs','text/javascript; charset=utf-8'),'/style.css':('style.css','text/css; charset=utf-8'),'/favicon.svg':('favicon.svg','image/svg+xml')}
         if path in files:
             name,kind=files[path];return self.respond((ROOT/'web'/name).read_bytes(),kind=kind)
         self.respond({'error':'Not found'},404)
