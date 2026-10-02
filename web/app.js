@@ -6,7 +6,7 @@ let view='research',busy=false,status={},poll;
 let currentChatId=null,currentChat=null,library={chats:[],folders:[]},folderFilter='all',nameAction=null,deleteAction=null;
 let activeTurnId=null,streamController=null,stopRequested=false,retryTurn=null;
 let streamedPartial={answer:'',reasoning:''};
-const noSearchOption=new Option('No search · just chat','chat');$('#depth').add(noSearchOption);
+const noSearchOption=new Option('No search','chat');$('#depth').add(noSearchOption);
 const stopButton=document.createElement('button');stopButton.type='button';stopButton.id='stop-response';stopButton.className='secondary';stopButton.textContent='Stop';stopButton.hidden=true;stopButton.disabled=true;$('#submit').after(stopButton);
 const alternatives=document.createElement('div');alternatives.id='response-alternatives';alternatives.hidden=true;$('#output').after(alternatives);
 const bottomButton=document.createElement('button');bottomButton.type='button';bottomButton.id='chat-bottom';bottomButton.className='secondary';bottomButton.setAttribute('aria-label','Scroll to bottom of chat');bottomButton.title='Scroll to bottom';bottomButton.innerHTML=icon('chevron-up');bottomButton.hidden=true;document.body.append(bottomButton);
