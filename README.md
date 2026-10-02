@@ -60,6 +60,12 @@ In **Settings → Embeddings**, enter your embedding provider's `/v1` base URL a
 
 ## Data files
 
+For the bundled database, a complete semantic index is **69,794 eligible dialogue vectors**, out of **112,827 archive records**. The remaining 43,033 structural HUB, empty, or non-dialogue records stay available in context but are excluded from search and new embeddings. Older builds may have around 112,826 stored vectors, including excluded records; that larger stored count is not the current completion target. Settings checks the actual eligible IDs for the selected provider and model, shows **Complete** or **Incomplete**, and reports how many are missing. Checking an already complete index makes no embedding requests.
+
+Incomplete builds offer **Resume semantic index**. Progress updates in Settings and the terminal include ready/eligible counts, percentage, remaining vectors, and elapsed time. Provider failures show an HTTP code or connection/timeout explanation; the last build error survives a restart. Previously committed batches are retained. If a provider rate-limits the build, wait and resume with the same embedding settings.
+
+The terminal reports startup inventory, build progress, completion, and errors without printing every polling request. Diagnostics also go to `data/minnie.log`, with up to three rotated backups. API keys and the phone access code are not written to this log. Include the relevant error lines when reporting a problem.
+
 `source/` contains the extracted original DB and Ruby browser reference. The app opens the original database with `mode=ro`. `data/normalized.sqlite` contains the generated lexical index, metadata and vectors; `data/` is ignored by version control. The supplied source archives are retained.
 
 ## Verify

@@ -97,6 +97,7 @@ class CorpusTests(unittest.TestCase):
     def test_semantic_cosine_and_hybrid_provenance(self):
         config={'baseUrl':'http://test.invalid','model':'test-only'}
         key=app.embedding_key(config)
+        with app.db() as c:previous=[tuple(r) for r in c.execute("SELECT * FROM vectors WHERE id IN ('381:13','381:28')")]
         try:
             with app.db() as c:
                 c.executemany('INSERT OR REPLACE INTO vectors VALUES(?,?,?)',[
@@ -111,7 +112,9 @@ class CorpusTests(unittest.TestCase):
                 self.assertIsNotNone(item['retrieval']['lexical'])
                 self.assertEqual(item['retrieval']['vector'],1)
         finally:
-            with app.db() as c:c.execute('DELETE FROM vectors WHERE model=?',(key,))
+            with app.db() as c:
+                c.execute('DELETE FROM vectors WHERE model=?',(key,))
+                c.executemany('INSERT OR REPLACE INTO vectors VALUES(?,?,?)',previous)
 
     def test_research_tools_and_citations(self):
         responses=[{'choices':[{'message':{'role':'assistant','content':None,'tool_calls':[{'id':'test-call','type':'function','function':{'name':'getContext','arguments':'{"nodeId":"381:13"}'}}]}}]},

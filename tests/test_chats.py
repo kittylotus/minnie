@@ -82,10 +82,13 @@ class RetrievalNoiseTests(unittest.TestCase):
     def test_semantic_only_useful_dialogue_is_kept(self):
         import array
         config={'baseUrl':'http://test.invalid','model':'noise-filter-test'};key=app.embedding_key(config)
+        with app.db() as c:previous=[tuple(r) for r in c.execute("SELECT * FROM vectors WHERE id IN ('630:83','381:13')")]
         try:
             with app.db() as c:c.executemany('INSERT OR REPLACE INTO vectors VALUES(?,?,?)',[(i,key,array.array('f',[1,0]).tobytes()) for i in ('630:83','381:13')])
             with patch.object(app,'settings',return_value={'embedding':config}),patch.object(app,'embed',return_value=[[1,0]]):result=app.search('unique-concept-not-in-corpus','hybrid')
             self.assertEqual([n['id'] for n in result['results']],['381:13'])
             self.assertIsNone(result['results'][0]['retrieval']['lexical'])
         finally:
-            with app.db() as c:c.execute('DELETE FROM vectors WHERE model=?',(key,))
+            with app.db() as c:
+                c.execute('DELETE FROM vectors WHERE model=?',(key,))
+                c.executemany('INSERT OR REPLACE INTO vectors VALUES(?,?,?)',previous)

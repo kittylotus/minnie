@@ -1,4 +1,5 @@
 """Minnie: a local, evidence-first FAYDE research desk. Python 3.12+, no dependencies."""
+import logging, logging.handlers, urllib.error
 import argparse, array, collections, concurrent.futures, difflib, hashlib, http.cookies, json, math, os, pathlib, re, secrets, socket, sqlite3, threading, time, urllib.request, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -14,6 +15,16 @@ LOCK = threading.Lock()
 STATUS = {'running': False, 'done': 0, 'total': 0, 'error': None}
 TOKEN = secrets.token_urlsafe(24)
 MOBILE = None
+LOG=logging.getLogger('minnie')
+ELIGIBLE_CACHE={}
+INVENTORY_LOCK=threading.Lock()
+
+def configure_logging():
+    LOG.setLevel(logging.INFO)
+    formatter=logging.Formatter('%(asctime)s [%(levelname)s] %(message)s',datefmt='%H:%M:%S')
+    for handler in (logging.StreamHandler(),logging.handlers.RotatingFileHandler(DATA/'minnie.log',maxBytes=2_000_000,backupCount=3,encoding='utf-8')):
+        handler.setFormatter(formatter);LOG.addHandler(handler)
+    LOG.info('Minnie is starting. Diagnostic log: %s',DATA/'minnie.log')
 
 class ManagedConnection(sqlite3.Connection):
     def __exit__(self,*args):
@@ -210,6 +221,14 @@ def context(node_id, depth=1, includeBranch=False):
     if includeBranch:result['branch']=dialogue_branch(node_id)
     return result
 
+def provider_error(error):
+    if isinstance(error,urllib.error.HTTPError):
+        advice={401:'Check the API key.',403:'The provider denied access.',404:'Check the base URL and model ID.',429:'The provider rate-limited this request. Wait, then resume the build.'}.get(error.code,'The provider could not complete the request; retry later.' if error.code>=500 else 'Check the provider configuration.')
+        return f'Provider returned HTTP {error.code}. {advice}'
+    reason=error.reason if isinstance(error,urllib.error.URLError) else error
+    if isinstance(reason,TimeoutError):return 'Provider request timed out. Saved batches remain available; retry or resume.'
+    return f'Provider connection failed ({type(reason).__name__}). Check that the provider is running and the URL, model and key are correct.'
+
 def provider(config, endpoint, payload=None):
     if not config.get('baseUrl'): raise ValueError('Set the provider URL in Settings first.')
     if payload is not None and not config.get('model'): raise ValueError('Set the provider model in Settings first.')
@@ -221,7 +240,7 @@ def provider(config, endpoint, payload=None):
     req=urllib.request.Request(url,json.dumps(payload).encode() if payload is not None else None,headers)
     try:
         with urllib.request.urlopen(req,timeout=180) as response: return json.load(response)
-    except Exception as e: raise ValueError(f'Provider request failed ({type(e).__name__}). Check the URL, model and key.') from e
+    except Exception as e: raise ValueError(provider_error(e)) from e
 
 def list_models(kind, baseUrl=None, apiKey=None):
     if kind not in ('llm','embedding'):raise ValueError('Choose an answer or embedding provider.')
@@ -321,7 +340,7 @@ def stream_completion(config,payload,emit):
     content='';reasoning='';calls={};finished=False;field=None
     try:
         response=urllib.request.urlopen(request,timeout=180)
-    except Exception as e:raise ValueError(f'Provider stream failed ({type(e).__name__}). Check the URL, model and key.') from e
+    except Exception as e:raise ValueError(provider_error(e)) from e
     with response:
         if 'application/json' in response.headers.get('Content-Type',''):
             data=json.load(response)
@@ -372,28 +391,72 @@ def embed(texts,config):
 
 def embedding_key(config): return config.get('baseUrl','')+'|'+config.get('model','')
 
-def index_vectors():
+def index_inventory(config):
+    key=embedding_key(config)
+    with db() as c:
+        total=c.execute('SELECT count(*) FROM nodes').fetchone()[0]
+        fingerprint=c.execute("SELECT value FROM manifest WHERE key='sourceHash'").fetchone()
+        signature=(str(INDEX.resolve()),fingerprint[0] if fingerprint else '',total)
+        with INVENTORY_LOCK:
+            if signature not in ELIGIBLE_CACHE:
+                ELIGIBLE_CACHE.clear()
+                ELIGIBLE_CACHE[signature]=frozenset(r['id'] for r in c.execute('SELECT id,text,speaker,alternates FROM nodes') if meaningful_dialogue(r))
+            eligible=ELIGIBLE_CACHE[signature]
+        stored={r[0] for r in c.execute('SELECT id FROM vectors WHERE model=?',(key,))}
+        failure=c.execute('SELECT value FROM manifest WHERE key=?',('indexError:'+key,)).fetchone()
+    ready=len(eligible&stored)
+    return {'eligible':len(eligible),'ready':ready,'remaining':len(eligible)-ready,'excluded':total-len(eligible),'stored':len(stored),'excludedStored':len(stored-eligible),'complete':len(eligible)==ready,'configured':bool(config.get('model') and config.get('baseUrl')),'lastError':failure[0] if failure else None}
+
+def start_index(config):
+    config=dict(config)
+    with LOCK:
+        if STATUS['running']:raise ValueError('Indexing is already running.')
+        inventory=index_inventory(config)
+        key=embedding_key(config)
+        if inventory['complete']:
+            STATUS.update(running=False,done=0,total=0,error=None,modelKey=key)
+            with db() as c:c.execute('DELETE FROM manifest WHERE key=?',('indexError:'+key,))
+            LOG.info('Semantic index already complete: %s / %s eligible dialogue vectors. No provider calls needed.',f"{inventory['ready']:,}",f"{inventory['eligible']:,}")
+            return {'started':False,'alreadyComplete':True}
+        STATUS.update(running=True,done=0,total=inventory['remaining'],error=None,modelKey=key)
+        threading.Thread(target=index_vectors,args=(config,),daemon=True).start()
+        return {'started':True,'alreadyComplete':False}
+
+def index_vectors(config=None):
+    conf=dict(config if config is not None else settings()['embedding']);key=embedding_key(conf)
+    started=time.monotonic()
     try:
-        conf=settings()['embedding']; key=embedding_key(conf)
+        inventory=index_inventory(conf)
+        LOG.info('Semantic index: %s / %s ready; %s remaining; %s structural/empty records excluded. Model: %s',f"{inventory['ready']:,}",f"{inventory['eligible']:,}",f"{inventory['remaining']:,}",f"{inventory['excluded']:,}",conf.get('model','(unset)'))
         with db() as c:
-            rows=c.execute('SELECT * FROM nodes WHERE id NOT IN (SELECT id FROM vectors WHERE model=?) ORDER BY conversation,line',(key,)).fetchall()
-            STATUS.update(total=len(rows),done=0,error=None)
+            c.execute('DELETE FROM manifest WHERE key=?',('indexError:'+key,));c.commit()
+            rows=[r for r in c.execute('SELECT * FROM nodes WHERE id NOT IN (SELECT id FROM vectors WHERE model=?) ORDER BY conversation,line',(key,)) if meaningful_dialogue(r)]
+            STATUS.update(total=len(rows),done=0,error=None,modelKey=key)
+            next_report=0
             for start in range(0,len(rows),32):
-                batch=rows[start:start+32]
-                batch=[r for r in batch if meaningful_dialogue(r)]
-                if not batch:STATUS['done']=min(start+32,len(rows));continue
-                texts=[]
+                batch=rows[start:start+32];texts=[]
                 for r in batch:
-                    # Branch-aware context, not arbitrary token slices.
                     ctx=context(r['id'])
                     nearby='\n'.join(n['speaker']+': '+n['text'] for n in ctx['nodes'] if n['id']!=r['id'])[:2400]
                     texts.append(f"Speaker: {r['speaker']}\nConversation: {r['title']}\n{r['text']}\nAlternate lines: {r['alternates']}\nBranch context:\n{nearby}")
                 vectors=embed(texts,conf)
                 c.executemany('INSERT OR REPLACE INTO vectors VALUES(?,?,?)',[(r['id'],key,array.array('f',v).tobytes()) for r,v in zip(batch,vectors)])
-                c.commit(); STATUS['done']=min(start+32,len(rows))
+                c.commit();STATUS['done']=min(start+len(batch),len(rows))
+                if time.monotonic()>=next_report or STATUS['done']==len(rows):
+                    ready=inventory['ready']+STATUS['done']
+                    LOG.info('Embedding progress: %s / %s (%.1f%%); %s remaining; %.0fs elapsed.',f'{ready:,}',f"{inventory['eligible']:,}",100*ready/max(1,inventory['eligible']),f"{inventory['eligible']-ready:,}",time.monotonic()-started)
+                    next_report=time.monotonic()+10
             c.execute('INSERT OR REPLACE INTO manifest VALUES(?,?)',('embeddingModel',key))
-    except Exception as e: STATUS['error']=str(e)
-    finally: STATUS['running']=False
+        final=index_inventory(conf)
+        LOG.info('Semantic index complete: %s / %s eligible vectors, %s excluded; %.0fs elapsed.',f"{final['ready']:,}",f"{final['eligible']:,}",f"{final['excluded']:,}",time.monotonic()-started)
+    except Exception as e:
+        STATUS['error']=str(e)
+        LOG.error('Embedding build stopped after %s new vectors: %s. Saved batches are retained; select Resume semantic index to continue.',STATUS['done'],str(e))
+        try:
+            with db() as c:c.execute('INSERT OR REPLACE INTO manifest VALUES(?,?)',('indexError:'+key,str(e)))
+        except Exception as persistence_error:
+            LOG.error('Could not save the build error to the index: %s',persistence_error)
+    finally:STATUS['running']=False
 
 def search(query, mode='hybrid', speaker='', skill='', limit=30):
     limit=min(max(int(limit),1),150); query=query.strip()[:1000]
@@ -519,6 +582,11 @@ def research(payload, emit=None):
     return {'answer':answer,'reasoning':'\n\n'.join(reasoning),'evidence':[evidence[i] for i in dict.fromkeys(ids) if i in evidence], 'retrieved':list(evidence.values())[:100],'trace':trace,'citationWarning':bool(invalid) or bool(answer and not ids),'semantic':first['semantic']}
 
 class Handler(BaseHTTPRequestHandler):
+    def log_message(self,format,*args):
+        # Routine polling and asset requests stay quiet. Never log request bodies or credentials.
+        if len(args)>1 and str(args[1]).isdigit() and int(args[1])>=400:
+            LOG.warning('HTTP %s %s',args[1],self.path.split('?')[0])
+
     def persistent_research(self,payload,emit=None):
         chat_id,turn_id=begin_turn(payload)
         try:
@@ -537,6 +605,7 @@ class Handler(BaseHTTPRequestHandler):
         try:emit('done',self.persistent_research(payload,emit))
         except (BrokenPipeError,ConnectionResetError):pass
         except Exception as e:
+            LOG.error('Research stream failed: %s',str(e))
             try:emit('error',{'error':str(e)})
             except (BrokenPipeError,ConnectionResetError):pass
     def respond(self,value,status=200,kind='application/json'):
@@ -552,9 +621,14 @@ class Handler(BaseHTTPRequestHandler):
             if not self.authorized():return self.respond({'error':'Enter the access code shown on the desktop.'},401)
             with db() as c:
                 counts=c.execute('SELECT count(*) nodes,count(DISTINCT conversation) conversations FROM nodes').fetchone()
-                vectors=c.execute('SELECT count(*) FROM vectors WHERE model=?',(embedding_key(settings().get('embedding',{})),)).fetchone()[0]
+                config=settings().get('embedding',{})
                 speakers=[r[0] for r in c.execute('SELECT DISTINCT speaker FROM nodes ORDER BY speaker')]
-            return self.respond({'nodes':counts[0],'conversations':counts[1],'vectors':vectors,'index':STATUS,'speakers':speakers,'skills':sorted(SKILLS),'mobile':MOBILE if self.client_address[0] in ('127.0.0.1','::1') else None})
+            inventory=index_inventory(config)
+            progress={**STATUS,**inventory}
+            progress['running']=STATUS['running'] and STATUS.get('modelKey')==embedding_key(config)
+            progress['error']=STATUS['error'] if STATUS.get('modelKey')==embedding_key(config) else None
+            progress['error']=progress['error'] or inventory['lastError']
+            return self.respond({'nodes':counts[0],'conversations':counts[1],'vectors':inventory['ready'],'index':progress,'speakers':speakers,'skills':sorted(SKILLS),'mobile':MOBILE if self.client_address[0] in ('127.0.0.1','::1') else None})
         if path=='/api/settings':
             if not self.authorized():return self.respond({'error':'Access code required.'},401)
             conf=settings()
@@ -591,22 +665,29 @@ class Handler(BaseHTTPRequestHandler):
             if self.path=='/api/settings':
                 return self.respond(save_settings(payload))
             if self.path=='/api/index':
-                with LOCK:
-                    if STATUS['running']:raise ValueError('Indexing is already running.')
-                    conf=settings()['embedding']
-                    if not conf.get('model') or not conf.get('baseUrl'):raise ValueError('Save an embedding provider first.')
-                    STATUS.update(running=True,done=0,total=0,error=None)
-                    threading.Thread(target=index_vectors,daemon=True).start()
-                return self.respond({'started':True})
+                conf=settings()['embedding']
+                if not conf.get('model') or not conf.get('baseUrl'):raise ValueError('Save an embedding provider first.')
+                return self.respond(start_index(conf))
             self.respond({'error':'Not found'},404)
-        except Exception as e:self.respond({'error':str(e)},400)
+        except Exception as e:
+            LOG.error('Request %s failed: %s',self.path.split('?')[0],str(e))
+            self.respond({'error':str(e)},400)
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--host',default='127.0.0.1');parser.add_argument('--port',type=int,default=8765);args=parser.parse_args()
+    configure_logging()
     initialize()
+    initial=index_inventory(settings().get('embedding',{}))
+    LOG.info('Corpus: %s indexed records; %s eligible dialogue records; %s excluded.',f"{initial['eligible']+initial['excluded']:,}",f"{initial['eligible']:,}",f"{initial['excluded']:,}")
+    if initial['configured']:
+        LOG.info('Semantic index %s: %s / %s eligible vectors; %s remaining.', 'complete' if initial['complete'] else 'incomplete',f"{initial['ready']:,}",f"{initial['eligible']:,}",f"{initial['remaining']:,}")
+        if initial['lastError']:LOG.error('Previous embedding build failed: %s',initial['lastError'])
     with chat_db() as c:c.execute("UPDATE turns SET status='error',error='Server restarted before this answer finished. Ask again to retry.' WHERE status='pending'")
     print(f'Open http://localhost:{args.port}',flush=True)
     if args.host=='0.0.0.0':
         MOBILE={'url':f'http://{socket.gethostbyname(socket.gethostname())}:{args.port}','code':TOKEN}
         print(f"Phone: {MOBILE['url']}\nAccess code: {TOKEN}",flush=True)
-    ThreadingHTTPServer((args.host,args.port),Handler).serve_forever()
+    server=ThreadingHTTPServer((args.host,args.port),Handler)
+    try:server.serve_forever()
+    except KeyboardInterrupt:LOG.info('Minnie stopped. Committed embedding batches are saved for the next run.')
+    finally:server.server_close()

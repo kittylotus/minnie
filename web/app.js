@@ -266,6 +266,7 @@ async function saveSettings(kind){
   await api('settings',body);
   if(kind){const key=f.elements[kind+'-key'];if(key.value)key.placeholder='Saved · leave blank to keep';key.value='';$('#'+kind+'-provider-status').textContent='Provider saved.';}
   else $('#settings-feedback').textContent='Custom instructions saved.';
+  if(kind==='embedding')await refreshStatus();
 }
 $('#settings-form').onsubmit=async e=>{e.preventDefault();try{await saveSettings();}catch(e){$('#settings-feedback').textContent=e.message;}};
 for(const kind of ['llm','embedding']){
@@ -306,8 +307,30 @@ for(const kind of ['llm','embedding']){
     finally{ping.disabled=false;}
   };
 }
-$('#build-index').onclick=async()=>{try{await saveSettings('embedding');await api('index',{});$('#index-status').textContent='Starting semantic index…';if(!poll)poll=setInterval(refreshStatus,5000);}catch(e){$('#index-status').textContent=e.message;}};
-async function refreshStatus(){try{status=await api('status');$('#side-count').textContent=status.nodes.toLocaleString()+' searchable lines';$('#corpus-count').innerHTML=status.nodes.toLocaleString()+' lines<br>'+status.conversations.toLocaleString()+' conversations';$('#retrieval-label').textContent=status.vectors?status.vectors.toLocaleString()+' semantic vectors · exact search ready':'Exact search ready · semantic index not built';if($('#speaker').options.length===1)for(const s of status.speakers)$('#speaker').add(new Option(s,s));if($('#skill').options.length===1)for(const s of status.skills)$('#skill').add(new Option(s,s));$('#index-status').textContent=status.index.running?`Embedding ${status.index.done.toLocaleString()} / ${status.index.total.toLocaleString()} remaining lines`:(status.index.error||`${status.vectors.toLocaleString()} vectors ready`);$('#build-index').disabled=status.index.running;if(!status.index.running&&poll){clearInterval(poll);poll=null;}}catch(e){feedback(e.message,true);}}
+$('#build-index').onclick=async()=>{try{await saveSettings('embedding');const result=await api('index',{});$('#index-status').textContent=result.alreadyComplete?'Semantic index is already complete.':'Starting semantic index…';await refreshStatus();if(status.index.running&&!poll)poll=setInterval(refreshStatus,2000);}catch(e){$('#index-status').textContent=e.message;}};
+async function refreshStatus(){
+  try{
+    status=await api('status');const idx=status.index,n=v=>Number(v||0).toLocaleString();
+    $('#side-count').textContent=n(status.nodes)+' archive records';$('#corpus-count').innerHTML=n(status.nodes)+' records<br>'+n(status.conversations)+' conversations';
+    $('#retrieval-label').textContent=idx.complete&&idx.configured?`Semantic index complete · ${n(idx.ready)} / ${n(idx.eligible)} dialogue vectors`:(status.vectors?`${n(idx.ready)} / ${n(idx.eligible)} dialogue vectors · partial semantic index`:'Exact search ready · semantic index not built');
+    if($('#speaker').options.length===1)for(const s of status.speakers)$('#speaker').add(new Option(s,s));
+    if($('#skill').options.length===1)for(const s of status.skills)$('#skill').add(new Option(s,s));
+    let message;
+    if(!idx.configured)message=`${n(idx.eligible)} dialogue records can be indexed. Save an embedding provider to start.`;
+    else if(idx.running)message=`Building: ${n(idx.ready)} / ${n(idx.eligible)} eligible vectors (${Math.round(100*idx.ready/Math.max(1,idx.eligible))}%). ${n(idx.remaining)} remaining.`;
+    else if(idx.complete)message=`Complete: ${n(idx.ready)} / ${n(idx.eligible)} eligible dialogue vectors. Nothing left to build.`;
+    else message=`Incomplete: ${n(idx.ready)} / ${n(idx.eligible)} eligible vectors. ${n(idx.remaining)} remaining; resume the build.`;
+    message+=` ${n(idx.excluded)} HUB, empty, or non-dialogue records are excluded.`;
+    if(idx.excludedStored)message+=` ${n(idx.excludedStored)} older vectors for excluded records remain stored but are not searched.`;
+    if(idx.error)message+=` Last build error: ${idx.error}`;
+    $('#index-status').textContent=message;$('#index-status').className=idx.error?'notice':'';
+    $('#build-index').disabled=idx.running;
+    $('#build-index').textContent=idx.running?'Building semantic index…':idx.complete&&idx.configured?'Check semantic index':idx.ready?'Resume semantic index':'Build semantic index';
+    if(idx.running&&!poll)poll=setInterval(refreshStatus,2000);
+    if(!idx.running&&poll){clearInterval(poll);poll=null;}
+  }catch(e){feedback(e.message,true);}
+}
+
 async function mobileInfo(){try{const s=await api('status');if(s.mobile)$('#mobile-info').textContent=`On the same Wi-Fi, open ${s.mobile.url} and enter access code: ${s.mobile.code}. Keep this computer running.`;}catch{}}
 $('#settings-open').addEventListener('click',mobileInfo);
 $('#login-form').onsubmit=async e=>{e.preventDefault();try{const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:$('#access-code').value.trim()})});if(!r.ok)throw Error((await r.json()).error);$('#login-dialog').close();await refreshStatus();}catch(e){$('#login-error').textContent=e.message;}};
