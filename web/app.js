@@ -8,16 +8,20 @@ let activeTurnId=null,streamController=null,stopRequested=false,retryTurn=null;
 let streamedPartial={answer:'',reasoning:''};
 const noSearchOption=new Option('No search · just chat','chat');$('#depth').add(noSearchOption);
 const stopButton=document.createElement('button');stopButton.type='button';stopButton.id='stop-response';stopButton.className='secondary';stopButton.textContent='Stop';stopButton.hidden=true;stopButton.disabled=true;$('#submit').after(stopButton);
-const retryButton=document.createElement('button');retryButton.type='button';retryButton.id='retry-response';retryButton.className='text-button';retryButton.textContent='Try again';retryButton.hidden=true;$('#output').after(retryButton);
-const alternatives=document.createElement('div');alternatives.id='response-alternatives';alternatives.hidden=true;retryButton.before(alternatives);
+const alternatives=document.createElement('div');alternatives.id='response-alternatives';alternatives.hidden=true;$('#output').after(alternatives);
 const bottomButton=document.createElement('button');bottomButton.type='button';bottomButton.id='chat-bottom';bottomButton.className='secondary';bottomButton.setAttribute('aria-label','Scroll to bottom of chat');bottomButton.title='Scroll to bottom';bottomButton.innerHTML=icon('chevron-up');bottomButton.hidden=true;document.body.append(bottomButton);
 bottomButton.onclick=()=>window.scrollTo({top:document.documentElement.scrollHeight,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
 function updateBottomButton(){bottomButton.hidden=!document.body.classList.contains('chat-active')||document.documentElement.scrollHeight-window.innerHeight-window.scrollY<160;}
 window.addEventListener('scroll',updateBottomButton,{passive:true});window.addEventListener('resize',updateBottomButton);
 new ResizeObserver(updateBottomButton).observe($('.desk'));
-function variantControls(turn){const count=turn.variants?.length||0,index=turn.variant_index;return count>1?`<div class="variant-controls" aria-label="Response alternatives"><button type="button" class="text-button variant-previous" data-variant-turn="${escapeHTML(turn.id)}" data-variant-index="${index-1}" aria-label="Previous response" ${index<=0||busy?'disabled':''}>${icon('chevron-up')}</button><span>Response ${index+1} of ${count}</span><button type="button" class="text-button variant-next" data-variant-turn="${escapeHTML(turn.id)}" data-variant-index="${index+1}" aria-label="Next response" ${index>=count-1||busy?'disabled':''}>${icon('chevron-up')}</button></div>`:'';}
-function updateRetryButton(){const last=currentChat?.turns.at(-1);retryButton.hidden=view!=='research'||busy||!last||last.status==='pending';retryButton.disabled=busy;alternatives.hidden=retryButton.hidden||!(last?.variants?.length>1);alternatives.innerHTML=last?variantControls(last):'';}
-document.addEventListener('click',async e=>{const button=e.target.closest('[data-variant-turn]');if(!button||button.disabled||busy)return;try{currentChat=await api('chat/variant',{chatId:currentChatId,turnId:button.dataset.variantTurn,index:Number(button.dataset.variantIndex)});renderChat(currentChat);}catch(e){feedback(e.message,true);}});
+function variantControls(turn,allowRetry=false){
+  const count=Math.max(1,turn.variants?.length||0),index=Math.max(0,turn.variant_index??0),generate=allowRetry&&index===count-1;
+  if(count===1&&!allowRetry)return '';
+  return `<div class="variant-controls" aria-label="Response alternatives"><button type="button" class="text-button variant-previous" data-variant-turn="${escapeHTML(turn.id)}" data-variant-index="${index-1}" aria-label="Previous response" title="Previous response" ${index<=0||busy?'disabled':''}>${icon('chevron-up')}</button><span>Response ${index+1} of ${count}</span><button type="button" class="text-button variant-next" data-variant-turn="${escapeHTML(turn.id)}" data-variant-index="${index+1}" ${generate?'data-retry-response="true"':''} aria-label="${generate?'Try again: generate another response':'Next response'}" title="${generate?'Try again':'Next response'}" ${busy||(!generate&&index>=count-1)?'disabled':''}>${icon('chevron-up')}</button></div>`;
+}
+function updateRetryButton(){const last=currentChat?.turns.at(-1);alternatives.hidden=view!=='research'||busy||!last||last.status==='pending';alternatives.innerHTML=last?variantControls(last,true):'';}
+function retryLatestResponse(){const last=currentChat?.turns.at(-1);if(busy||!last||last.status==='pending')return;retryTurn=last;$('#query').value=last.question;$('#query-form').requestSubmit();}
+document.addEventListener('click',async e=>{const button=e.target.closest('[data-variant-turn]');if(!button||button.disabled||busy)return;if(button.dataset.retryResponse){retryLatestResponse();return;}try{currentChat=await api('chat/variant',{chatId:currentChatId,turnId:button.dataset.variantTurn,index:Number(button.dataset.variantIndex)});renderChat(currentChat);}catch(e){feedback(e.message,true);}});
 function syncMode(){const direct=view==='research'&&$('#depth').value==='chat';$('#source-options-heading').closest('section').hidden=direct;$('.filters').hidden=view==='saved'||direct;$('#speaker').disabled=direct;$('#skill').disabled=direct;if(view==='research'&&!busy)$('#submit').textContent=document.body.classList.contains('chat-active')?'Send':direct?'Send':'Research';}
 $('#depth').onchange=syncMode;
 const composerDock=document.createElement('div');composerDock.id='composer-dock';composerDock.hidden=true;document.querySelector('main').append(composerDock);
@@ -261,7 +265,7 @@ function showResults(data){
 $('#query-form').onsubmit=async e=>{
   e.preventDefault();const query=$('#query').value.trim();if(!query||busy)return;
   const retry=retryTurn;retryTurn=null;const depth=retry?.request?.depth||$('#depth').value,verbosity=retry?.request?.verbosity||$('#verbosity').value;
-  stopRequested=false;streamedPartial={answer:'',reasoning:''};activeTurnId=null;streamController=new AbortController();stopButton.hidden=view!=='research';stopButton.disabled=true;$('#submit').hidden=view==='research';retryButton.hidden=true;
+  stopRequested=false;streamedPartial={answer:'',reasoning:''};activeTurnId=null;streamController=new AbortController();stopButton.hidden=view!=='research';stopButton.disabled=true;$('#submit').hidden=view==='research';alternatives.hidden=true;
   busy=true;document.body.classList.add('chat-busy');$('#submit').disabled=true;$('#starting').hidden=true;$('#output').hidden=true;$('#answer').textContent='';$('#results').textContent='';$('#reasoning-panel').hidden=true;$('#reasoning-panel').open=false;$('#reasoning-text').textContent='';$('#citation-warning').hidden=true;
   if(view==='research'){$('#query').value='';conversationLayout(true);}
   $('#feedback').className='';$('#feedback').innerHTML='<div class="progress-message"><span class="busy-dot"></span>'+(view==='search'?'Searching the archive…':'Following the evidence…')+'</div>';
@@ -282,7 +286,6 @@ stopButton.onclick=async()=>{
   try{const response=await api('research/stop',{chatId:currentChatId,turnId:activeTurnId,partial:streamedPartial});if(response.stopped){stopRequested=true;streamController?.abort();}}
   catch(e){feedback(e.message,true);stopButton.disabled=false;}
 };
-retryButton.onclick=()=>{const last=currentChat?.turns.at(-1);if(busy||!last||last.status==='pending')return;retryTurn=last;$('#query').value=last.question;$('#query-form').requestSubmit();};
 $('#query').onkeydown=e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){$('#query-form').requestSubmit();e.preventDefault();}};
 $('#clear-output').onclick=()=>{if(view==='research')newChat();else{$('#output').hidden=true;$('#starting').hidden=false;feedback('');}};
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$('#'+b.dataset.close).close());
