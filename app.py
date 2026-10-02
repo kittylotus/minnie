@@ -10,10 +10,11 @@ SOURCE = next((ROOT / 'source').glob('*.db'))
 INDEX = DATA / 'normalized.sqlite'
 CONFIG = DATA / 'settings.json'
 CHATS = DATA / 'chats.sqlite'
+ACCESS = DATA / 'access.json'
+ACCESS_LOCK=threading.Lock()
 SKILLS = {'Logic','Encyclopedia','Rhetoric','Drama','Conceptualization','Visual Calculus','Volition','Inland Empire','Empathy','Authority','Esprit de Corps','Suggestion','Endurance','Pain Threshold','Physical Instrument','Electrochemistry','Shivers','Half Light','Hand/Eye Coordination','Perception','Reaction Speed','Savoir Faire','Interfacing','Composure'}
 LOCK = threading.Lock()
 STATUS = {'running': False, 'done': 0, 'total': 0, 'error': None}
-TOKEN = secrets.token_urlsafe(24)
 MOBILE = None
 LOG=logging.getLogger('minnie')
 ELIGIBLE_CACHE={}
@@ -52,6 +53,36 @@ def configure_logging():
     for handler in (logging.StreamHandler(),logging.handlers.RotatingFileHandler(DATA/'minnie.log',maxBytes=2_000_000,backupCount=3,encoding='utf-8')):
         handler.setFormatter(formatter);LOG.addHandler(handler)
     LOG.info('Minnie is starting. Diagnostic log: %s',DATA/'minnie.log')
+
+def password_hash(password,salt):
+    return hashlib.pbkdf2_hmac('sha256',password.encode('utf-8'),bytes.fromhex(salt),260000).hex()
+
+def write_access(state):
+    temporary=ACCESS.with_suffix('.tmp')
+    temporary.write_text(json.dumps(state),encoding='utf-8');temporary.replace(ACCESS)
+
+def load_access():
+    with ACCESS_LOCK:
+        if ACCESS.exists():return json.loads(ACCESS.read_text(encoding='utf-8'))
+        alphabet='abcdefghjkmnpqrstuvwxyz23456789'
+        code='-'.join(''.join(secrets.choice(alphabet) for _ in range(4)) for _ in range(3))
+        salt=secrets.token_hex(16)
+        state={'salt':salt,'passwordHash':password_hash(code,salt),'sessionToken':secrets.token_urlsafe(32),'generatedCode':code,'passwordSet':False}
+        write_access(state);return state
+
+def login_access(password):
+    state=load_access()
+    if not isinstance(password,str) or len(password)>128 or not secrets.compare_digest(password_hash(password,state['salt']),state['passwordHash']):raise ValueError('Access password does not match.')
+    return state['sessionToken']
+
+def change_access_password(password,confirmation):
+    if not isinstance(password,str) or not 6<=len(password)<=128:raise ValueError('Use an access password between 6 and 128 characters.')
+    if password!=confirmation:raise ValueError('The passwords do not match.')
+    with ACCESS_LOCK:
+        salt=secrets.token_hex(16)
+        state={'salt':salt,'passwordHash':password_hash(password,salt),'sessionToken':secrets.token_urlsafe(32),'passwordSet':True}
+        write_access(state)
+    return state['sessionToken']
 
 class ManagedConnection(sqlite3.Connection):
     def __exit__(self,*args):
@@ -700,13 +731,18 @@ class Handler(BaseHTTPRequestHandler):
             LOG.error('Research stream failed: %s',str(e))
             try:emit('error',{'error':str(e)})
             except (BrokenPipeError,ConnectionResetError):pass
-    def respond(self,value,status=200,kind='application/json'):
+    def respond(self,value,status=200,kind='application/json',headers=None):
         body=(json.dumps(value,ensure_ascii=False).encode() if kind=='application/json' else value)
-        self.send_response(status);self.send_header('Content-Type',kind);self.send_header('Content-Length',str(len(body)));self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff');self.end_headers();self.wfile.write(body)
+        self.send_response(status);self.send_header('Content-Type',kind);self.send_header('Content-Length',str(len(body)));self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff')
+        for key,value in (headers or {}).items():self.send_header(key,value)
+        self.end_headers();self.wfile.write(body)
+    def access_cookie(self,token):
+        secure='; Secure' if self.headers.get('Origin')=='https://'+self.headers.get('Host','') else ''
+        return f'minnie={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=15552000{secure}'
     def authorized(self):
         if self.client_address[0] in ('127.0.0.1','::1'): return True
         cookie=http.cookies.SimpleCookie(self.headers.get('Cookie',''))
-        return 'minnie' in cookie and secrets.compare_digest(cookie['minnie'].value,TOKEN)
+        return 'minnie' in cookie and secrets.compare_digest(cookie['minnie'].value.encode('utf-8'),load_access()['sessionToken'].encode('utf-8'))
     def do_GET(self):
         path=self.path.split('?')[0]
         if path=='/api/status':
@@ -720,12 +756,15 @@ class Handler(BaseHTTPRequestHandler):
             progress['running']=STATUS['running'] and STATUS.get('modelKey')==embedding_key(config)
             progress['error']=STATUS['error'] if STATUS.get('modelKey')==embedding_key(config) else None
             progress['error']=progress['error'] or inventory['lastError']
-            return self.respond({'nodes':counts[0],'conversations':counts[1],'vectors':inventory['ready'],'index':progress,'speakers':speakers,'skills':sorted(SKILLS),'mobile':MOBILE if self.client_address[0] in ('127.0.0.1','::1') else None})
+            mobile={**MOBILE,'code':load_access().get('generatedCode'),'passwordSet':load_access()['passwordSet']} if MOBILE and self.client_address[0] in ('127.0.0.1','::1') else None
+            return self.respond({'nodes':counts[0],'conversations':counts[1],'vectors':inventory['ready'],'index':progress,'speakers':speakers,'skills':sorted(SKILLS),'mobile':mobile})
         if path=='/api/settings':
             if not self.authorized():return self.respond({'error':'Access code required.'},401)
             conf=settings()
             for key in ('llm','embedding'):
                 conf[key]['hasKey']=bool(conf[key].get('apiKey'));conf[key].pop('apiKey',None)
+            state=load_access();conf['access']={'passwordSet':state['passwordSet']}
+            if self.client_address[0] in ('127.0.0.1','::1') and state.get('generatedCode'):conf['access']['generatedCode']=state['generatedCode']
             return self.respond(conf)
         if path=='/api/chats':
             if not self.authorized():return self.respond({'error':'Access code required.'},401)
@@ -742,9 +781,13 @@ class Handler(BaseHTTPRequestHandler):
             if size>(2000000 if self.path=='/api/research/stop' else 100000):raise ValueError('Request too large.')
             payload=json.loads(self.rfile.read(size) or '{}')
             if self.path=='/api/login':
-                if not secrets.compare_digest(str(payload.get('token','')),TOKEN):return self.respond({'error':'Access code does not match.'},401)
-                self.send_response(200);self.send_header('Set-Cookie',f'minnie={TOKEN}; HttpOnly; SameSite=Strict; Path=/');self.end_headers();return
+                try:token=login_access(payload.get('password',payload.get('token','')))
+                except ValueError as e:return self.respond({'error':str(e)},401)
+                return self.respond({'connected':True},headers={'Set-Cookie':self.access_cookie(token)})
             if not self.authorized():return self.respond({'error':'Access code required.'},401)
+            if self.path=='/api/access/password':
+                token=change_access_password(payload.get('password'),payload.get('confirmation'))
+                return self.respond({'saved':True},headers={'Set-Cookie':self.access_cookie(token)})
             if self.path=='/api/search': return self.respond(search(**payload))
             if self.path=='/api/context': return self.respond(context(payload['nodeId'],payload.get('depth',1),bool(payload.get('includeBranch',False))))
             if self.path=='/api/research': return self.respond(self.persistent_research(payload))
@@ -770,6 +813,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--host',default='127.0.0.1');parser.add_argument('--port',type=int,default=8765);args=parser.parse_args()
     configure_logging()
+    access=load_access()
     initialize()
     initial=index_inventory(settings().get('embedding',{}))
     LOG.info('Corpus: %s indexed records; %s eligible dialogue records; %s excluded.',f"{initial['eligible']+initial['excluded']:,}",f"{initial['eligible']:,}",f"{initial['excluded']:,}")
@@ -779,8 +823,8 @@ if __name__=='__main__':
     with chat_db() as c:c.execute("UPDATE turns SET status='error',error='Server restarted before this answer finished. Ask again to retry.' WHERE status='pending'")
     print(f'Open http://localhost:{args.port}',flush=True)
     if args.host=='0.0.0.0':
-        MOBILE={'url':f'http://{socket.gethostbyname(socket.gethostname())}:{args.port}','code':TOKEN}
-        print(f"Phone: {MOBILE['url']}\nAccess code: {TOKEN}",flush=True)
+        MOBILE={'url':f'http://{socket.gethostbyname(socket.gethostname())}:{args.port}'}
+        print(f"Phone: {MOBILE['url']}\n"+('Access password: use your saved password.' if access['passwordSet'] else 'Access code: '+access['generatedCode']),flush=True)
     server=ThreadingHTTPServer((args.host,args.port),Handler)
     try:server.serve_forever()
     except KeyboardInterrupt:LOG.info('Minnie stopped. Committed embedding batches are saved for the next run.')

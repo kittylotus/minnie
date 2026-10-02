@@ -292,7 +292,7 @@ document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$('#'+b.datas
 $('#reading-open').onclick=()=>$('#reading-dialog').showModal();
 for(const [id,key]of[['brightness','brightness'],['font-size','size'],['line-spacing','spacing']])$('#'+id).oninput=e=>{reading[key]=+e.target.value;applyReading();localStorage.setItem('minnie-reading',JSON.stringify(reading));};
 $('#reset-reading').onclick=()=>{reading={brightness:112,size:19,spacing:18};applyReading();localStorage.setItem('minnie-reading',JSON.stringify(reading));};
-$('#settings-open').onclick=async()=>{try{const conf=await api('settings');const f=$('#settings-form');for(const kind of['llm','embedding']){f.elements[kind+'-url'].value=conf[kind]?.baseUrl||'';f.elements[kind+'-model'].value=conf[kind]?.model||'';f.elements[kind+'-key'].value='';f.elements[kind+'-key'].placeholder=conf[kind]?.hasKey?'Saved · leave blank to keep':'API key';}f.elements.instructions.value=conf.customInstructions||'';$('#settings-dialog').showModal();}catch(e){feedback(e.message,true);}};
+$('#settings-open').onclick=async()=>{try{const conf=await api('settings');const f=$('#settings-form');for(const kind of['llm','embedding']){f.elements[kind+'-url'].value=conf[kind]?.baseUrl||'';f.elements[kind+'-model'].value=conf[kind]?.model||'';f.elements[kind+'-key'].value='';f.elements[kind+'-key'].placeholder=conf[kind]?.hasKey?'Saved · leave blank to keep':'API key';}f.elements.instructions.value=conf.customInstructions||'';$('#new-access-password').value='';$('#confirm-access-password').value='';$('#access-password-feedback').textContent='';$('#access-password-state').textContent=conf.access?.passwordSet?'A custom access password is set.':conf.access?.generatedCode?'Initial access code: '+conf.access.generatedCode:'Choose an access password that is easy to enter on your phone.';$('#settings-dialog').showModal();}catch(e){feedback(e.message,true);}};
 function providerFields(kind){const f=$('#settings-form');return {baseUrl:f.elements[kind+'-url'].value.trim(),model:f.elements[kind+'-model'].value.trim(),apiKey:f.elements[kind+'-key'].value};}
 async function saveSettings(kind){
   const f=$('#settings-form');const body=kind?{[kind]:providerFields(kind)}:{customInstructions:f.elements.instructions.value};
@@ -364,9 +364,15 @@ async function refreshStatus(){
   }catch(e){feedback(e.message,true);}
 }
 
-async function mobileInfo(){try{const s=await api('status');if(s.mobile)$('#mobile-info').textContent=`On the same Wi-Fi, open ${s.mobile.url} and enter access code: ${s.mobile.code}. Keep this computer running.`;}catch{}}
+async function mobileInfo(){try{const s=await api('status');if(s.mobile)$('#mobile-info').textContent=`On the same Wi-Fi, open ${s.mobile.url} and ${s.mobile.passwordSet?'enter your saved access password':'enter access code: '+s.mobile.code}. Keep this computer running.`;}catch{}}
 $('#settings-open').addEventListener('click',mobileInfo);
-$('#login-form').onsubmit=async e=>{e.preventDefault();try{const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:$('#access-code').value.trim()})});if(!r.ok)throw Error((await r.json()).error);$('#login-dialog').close();await refreshStatus();}catch(e){$('#login-error').textContent=e.message;}};
+$('#save-access-password').onclick=async()=>{
+  const button=$('#save-access-password'),message=$('#access-password-feedback');button.disabled=true;message.textContent='';
+  try{await api('access/password',{password:$('#new-access-password').value,confirmation:$('#confirm-access-password').value});$('#new-access-password').value='';$('#confirm-access-password').value='';$('#access-password-state').textContent='A custom access password is set.';message.textContent='Password changed. This device is remembered; other devices must sign in again.';await mobileInfo();}
+  catch(e){message.textContent=e.message;}
+  finally{button.disabled=false;}
+};
+$('#login-form').onsubmit=async e=>{e.preventDefault();try{const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:$('#access-code').value})});if(!r.ok)throw Error((await r.json()).error);$('#login-dialog').close();$('#access-code').value='';await initializeChats();}catch(e){$('#login-error').textContent=e.message;}};
 async function initializeChats(){await refreshStatus();if(!status.nodes)return;try{await refreshLibrary();const id=localStorage.getItem('minnie-current-chat');if(id&&library.chats.some(c=>c.id===id))await openChat(id);}catch(e){feedback(e.message,true);}}
 initializeChats();
 

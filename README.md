@@ -16,6 +16,8 @@ python app.py --host 0.0.0.0
 
 Open the phone address printed in the terminal and enter its access code. Allow Python through Windows Firewall on your private network if prompted. Keep the computer running. LAN access uses HTTP; use a trusted private network. This is a local app, not an Internet deployment or a phone-native offline app.
 
+In **Settings → Phone access**, choose and confirm your own access password (6–128 characters), then select **Change access password**. The password is saved as a salted PBKDF2 hash in ignored `data/access.json`; the initial generated code is replaced. The saved password and device sessions survive Minnie restarts. Successful login sets a persistent, HttpOnly cookie for 180 days, subject to the browser's cookie policies. Changing the password rotates the session token, signs other devices out, and keeps the device making the change connected. You can always change it from localhost on the computer running Minnie. Keep using the same phone browser/profile and hostname; clearing cookies requires signing in again. Existing installations need one new login after updating from the old code-per-restart behavior.
+
 ## Research
 
 Dialogue search works immediately. Exact terms use SQLite FTS5; hybrid mode combines lexical rankings with semantic rankings using reciprocal rank fusion when embeddings exist. Semantic mode requires an index. Speaker and skill filters apply to retrieval. Alternate lines are included in lexical search and available in the evidence viewer. Citations use `conversation:line` because line IDs are only unique within conversations.
