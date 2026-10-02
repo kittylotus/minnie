@@ -18,6 +18,33 @@ MOBILE = None
 LOG=logging.getLogger('minnie')
 ELIGIBLE_CACHE={}
 INVENTORY_LOCK=threading.Lock()
+RUN_LOCK=threading.RLock()
+RUNS={}
+
+class GenerationStopped(Exception):pass
+
+class RunControl:
+    def __init__(self):self.cancelled=threading.Event();self.response=None
+    def check(self):
+        if self.cancelled.is_set():raise GenerationStopped('Response stopped.')
+    def stop(self):
+        self.cancelled.set()
+        if self.response:
+            threading.Thread(target=self.response.close,daemon=True).start()
+
+def stop_turn(chat_id,turn_id,partial=None):
+    with RUN_LOCK:
+        control=RUNS.get(turn_id)
+        chat=get_chat(chat_id)
+        turn=next((t for t in chat['turns'] if t['id']==turn_id),None)
+        if not turn:raise ValueError('Response not found in this chat.')
+        if turn['status']!='pending':return {'stopped':False}
+        if not control:raise ValueError('This response is not running on this server.')
+        control.stop()
+        partial=partial or {}
+        result={'answer':str(partial.get('answer',''))[:200000],'reasoning':str(partial.get('reasoning',''))[:200000],'evidence':[],'retrieved':[],'trace':[],'citationWarning':False,'semantic':False,'mode':'chat' if turn.get('request',{}).get('depth')=='chat' else 'stopped'}
+        finish_turn(turn_id,result=result,error='Response stopped.',status='stopped')
+        return {'stopped':True}
 
 def configure_logging():
     LOG.setLevel(logging.INFO)
@@ -45,6 +72,11 @@ def chat_db():
     c=sqlite3.connect(CHATS,timeout=30,factory=ManagedConnection);c.row_factory=sqlite3.Row
     c.execute('PRAGMA foreign_keys=ON')
     c.executescript('CREATE TABLE IF NOT EXISTS folders(id TEXT PRIMARY KEY,name TEXT NOT NULL,pinned INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS chats(id TEXT PRIMARY KEY,title TEXT NOT NULL,folder_id TEXT REFERENCES folders(id) ON DELETE SET NULL,pinned INTEGER NOT NULL DEFAULT 0,created_at REAL NOT NULL,updated_at REAL NOT NULL); CREATE TABLE IF NOT EXISTS turns(id TEXT PRIMARY KEY,chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,question TEXT NOT NULL,result TEXT,status TEXT NOT NULL,error TEXT,created_at REAL NOT NULL); CREATE INDEX IF NOT EXISTS turns_chat ON turns(chat_id,created_at);')
+    for name,definition in [('request','TEXT'),('variants','TEXT'),('variant_index','INTEGER NOT NULL DEFAULT -1')]:
+        if name not in {r[1] for r in c.execute('PRAGMA table_info(turns)')}:
+            try:c.execute(f'ALTER TABLE turns ADD COLUMN {name} {definition}')
+            except sqlite3.OperationalError:
+                if name not in {r[1] for r in c.execute('PRAGMA table_info(turns)')}:raise
     return c
 
 def chat_list():
@@ -57,7 +89,7 @@ def get_chat(chat_id):
         if not chat:raise ValueError('Chat not found.')
         turns=[]
         for r in c.execute('SELECT * FROM turns WHERE chat_id=? ORDER BY created_at',(chat_id,)):
-            turn=dict(r);turn['result']=json.loads(turn['result']) if turn['result'] else None;turns.append(turn)
+            turn=dict(r);turn['result']=json.loads(turn['result']) if turn['result'] else None;turn['request']=json.loads(turn['request']) if turn['request'] else {};turn['variants']=json.loads(turn['variants']) if turn['variants'] else [];turns.append(turn)
         return {**dict(chat),'turns':turns}
 
 def manage_chats(action, **fields):
@@ -98,14 +130,43 @@ def begin_turn(payload):
             if folder and not c.execute('SELECT 1 FROM folders WHERE id=?',(folder,)).fetchone():raise ValueError('Folder not found.')
             c.execute('INSERT INTO chats VALUES(?,?,?,?,?,?)',(chat_id,question[:72],folder,0,now,now))
         if c.execute("SELECT 1 FROM turns WHERE chat_id=? AND status='pending'",(chat_id,)).fetchone():raise ValueError('This chat already has a response in progress.')
-        c.execute('INSERT INTO turns VALUES(?,?,?,?,?,?,?)',(turn_id,chat_id,question,None,'pending',None,now))
+        request=json.dumps({k:payload[k] for k in ('depth','verbosity','speaker','skill') if k in payload})
+        if payload.get('retryTurnId'):
+            old=c.execute('SELECT * FROM turns WHERE chat_id=? ORDER BY created_at DESC LIMIT 1',(chat_id,)).fetchone()
+            if not old or old['id']!=payload['retryTurnId']:raise ValueError('Only the latest response can be retried.')
+            if old['question']!=question:raise ValueError('Retry must use the original question.')
+            turn_id=old['id']
+            if not old['variants']:
+                previous={'result':json.loads(old['result']) if old['result'] else None,'status':old['status'],'error':old['error'],'request':json.loads(old['request']) if old['request'] else {}}
+                c.execute('UPDATE turns SET variants=? WHERE id=?',(json.dumps([previous],ensure_ascii=False),turn_id))
+            c.execute("UPDATE turns SET result=NULL,status='pending',error=NULL,request=? WHERE id=?",(request,turn_id))
+        else:c.execute('INSERT INTO turns(id,chat_id,question,result,status,error,created_at,request) VALUES(?,?,?,?,?,?,?,?)',(turn_id,chat_id,question,None,'pending',None,now,request))
         c.execute('UPDATE chats SET updated_at=? WHERE id=?',(now,chat_id))
     return chat_id,turn_id
 
-def finish_turn(turn_id,result=None,error=None):
+def finish_turn(turn_id,result=None,error=None,status=None):
     with chat_db() as c:
-        c.execute('UPDATE turns SET result=?,status=?,error=? WHERE id=?',(json.dumps(result,ensure_ascii=False) if result else None,'complete' if result else 'error',error,turn_id))
+        c.execute('BEGIN IMMEDIATE')
+        turn=c.execute('SELECT * FROM turns WHERE id=?',(turn_id,)).fetchone()
+        if not turn:return
+        variants=json.loads(turn['variants']) if turn['variants'] else []
+        state=status or ('complete' if result else 'error')
+        variants.append({'result':result,'status':state,'error':error,'request':json.loads(turn['request']) if turn['request'] else {}})
+        c.execute('UPDATE turns SET result=?,status=?,error=?,variants=?,variant_index=? WHERE id=?',(json.dumps(result,ensure_ascii=False) if result else None,state,error,json.dumps(variants,ensure_ascii=False),len(variants)-1,turn_id))
         c.execute('UPDATE chats SET updated_at=? WHERE id=(SELECT chat_id FROM turns WHERE id=?)',(time.time(),turn_id))
+
+def select_variant(chat_id,turn_id,index):
+    with chat_db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        turn=c.execute('SELECT * FROM turns WHERE id=? AND chat_id=?',(turn_id,chat_id)).fetchone()
+        if not turn:raise ValueError('Response not found in this chat.')
+        if c.execute("SELECT 1 FROM turns WHERE chat_id=? AND status='pending'",(chat_id,)).fetchone():raise ValueError('Stop the current response before comparing alternatives.')
+        variants=json.loads(turn['variants']) if turn['variants'] else []
+        index=int(index)
+        if index<0 or index>=len(variants):raise ValueError('Response alternative not found.')
+        variant=variants[index]
+        c.execute('UPDATE turns SET result=?,status=?,error=?,request=?,variant_index=? WHERE id=?',(json.dumps(variant['result'],ensure_ascii=False) if variant['result'] else None,variant['status'],variant['error'],json.dumps(variant['request']),index,turn_id))
+    return get_chat(chat_id)
 
 def chat_history(chat_id):
     if not chat_id:return []
@@ -330,7 +391,7 @@ def sse_packets(response):
         elif line.startswith('data:'):lines.append(line[5:].lstrip(' '))
     if lines:yield '\n'.join(lines)
 
-def stream_completion(config,payload,emit):
+def stream_completion(config,payload,emit,control=None):
     if not config.get('baseUrl') or not config.get('model'):raise ValueError('Set the answer provider URL and model first.')
     url=config['baseUrl'].rstrip('/')+'/chat/completions'
     if not url.startswith(('http://','https://')):raise ValueError('Provider URL must use HTTP or HTTPS.')
@@ -341,7 +402,9 @@ def stream_completion(config,payload,emit):
     try:
         response=urllib.request.urlopen(request,timeout=180)
     except Exception as e:raise ValueError(provider_error(e)) from e
+    if control:control.response=response
     with response:
+        if control:control.check()
         if 'application/json' in response.headers.get('Content-Type',''):
             data=json.load(response)
             if not data.get('choices'):raise ValueError('Provider returned no completion.')
@@ -350,6 +413,7 @@ def stream_completion(config,payload,emit):
             emit('delta',{'answer':clean,'reasoning':reasoning_text(message)+tagged})
             return message
         for packet in sse_packets(response):
+            if control:control.check()
             if packet=='[DONE]':finished=True;break
             data=json.loads(packet)
             if data.get('error'):raise ValueError('The provider reported a streaming error.')
@@ -515,13 +579,24 @@ def readonly_sql(sql):
         rows=cursor.fetchmany(201)
         return {'columns':[d[0] for d in cursor.description], 'rows':[list(r) for r in rows[:200]],'truncated':len(rows)>200}
 
-def research(payload, emit=None):
+def research(payload, emit=None, control=None):
     conf=settings(); model=conf.get('llm',{})
     if not model.get('model'): raise ValueError('Configure your answer model in Settings. Dialogue search works without a model.')
     question=str(payload.get('query','')).strip()[:8000]
     if not question: raise ValueError('Enter a research question.')
     depth=payload.get('depth','research'); passes={'quick':2,'research':5,'exhaustive':9}.get(depth,5)
     history=chat_history(payload.get('chatId'))
+    if control:control.check()
+    if depth=='chat':
+        if emit:emit('round',{'round':1,'message':'Replying without searching…'})
+        messages=[{'role':'system','content':'You are a helpful assistant. No archive search or database tools are available in this mode. Help with general questions, editing and formatting supplied text. Do not claim to have searched or verified the archive.\n'+conf.get('customInstructions','')+'\nAnswer length: '+payload.get('verbosity','balanced')}]
+        for turn in history:messages.extend([{'role':'user','content':turn['question']},{'role':'assistant','content':turn['result'].get('answer','')}])
+        messages.append({'role':'user','content':question})
+        request={'model':model['model'],'messages':messages}
+        response=stream_completion(model,request,emit,control) if emit else provider(model,'chat/completions',request)['choices'][0]['message']
+        if control:control.check()
+        answer,tagged=split_reasoning(response.get('content') or '',final=True)
+        return {'answer':answer,'reasoning':reasoning_text(response)+tagged,'evidence':[],'retrieved':[],'trace':[],'citationWarning':False,'semantic':False,'mode':'chat'}
     evidence={n['id']:n for turn in history for n in turn['result'].get('evidence',[])};trace=[]
     def collect(result):
         for n in result.get('results',[]): evidence[n['id']]=n
@@ -542,10 +617,11 @@ def research(payload, emit=None):
     tools=[{'type':'function','function':{'name':name,'description':name+' in the read-only FAYDE corpus','parameters':{'type':'object','properties':props,'required':req}}} for name,props,req in definitions]
     answer='';reasoning=[]
     for turn in range(passes+1):
+        if control:control.check()
         request={'model':model['model'],'messages':messages,'tools':tools,'tool_choice':'none' if turn==passes else 'auto'}
         if emit:
             emit('round',{'round':turn+1,'message':'Reading the evidence…' if turn==0 else 'Following up on the evidence…'})
-            response=stream_completion(model,request,emit)
+            response=stream_completion(model,request,emit,control)
         else:response=provider(model,'chat/completions',request)['choices'][0]['message']
         clean,tagged=split_reasoning(response.get('content') or '',final=True)
         reason=reasoning_text(response)+tagged
@@ -554,6 +630,7 @@ def research(payload, emit=None):
         if not calls: answer=clean;break
         messages.append(response)
         for call in calls[:8]:
+            if control:control.check()
             name=call['function']['name']
             try:
                 args=json.loads(call['function']['arguments'])
@@ -588,21 +665,36 @@ class Handler(BaseHTTPRequestHandler):
             LOG.warning('HTTP %s %s',args[1],self.path.split('?')[0])
 
     def persistent_research(self,payload,emit=None):
-        chat_id,turn_id=begin_turn(payload)
+        with RUN_LOCK:
+            chat_id,turn_id=begin_turn(payload)
+            control=RunControl();RUNS[turn_id]=control
+        def checked_emit(event,data):
+            control.check()
+            if emit:emit(event,data)
         try:
-            if emit:emit('chat',{'chatId':chat_id,'turnId':turn_id})
-            result=research({**payload,'chatId':chat_id},emit)
+            checked_emit('chat',{'chatId':chat_id,'turnId':turn_id})
+            result=research({**payload,'chatId':chat_id},checked_emit if emit else None,control)
             result.update(chatId=chat_id,turnId=turn_id)
-            finish_turn(turn_id,result)
+            with RUN_LOCK:
+                control.check()
+                finish_turn(turn_id,result)
             return result
         except Exception as e:
-            finish_turn(turn_id,error='Connection interrupted.' if isinstance(e,(BrokenPipeError,ConnectionResetError)) else str(e))
+            with RUN_LOCK:
+                if RUNS.get(turn_id) is control and not control.cancelled.is_set():finish_turn(turn_id,error='Connection interrupted.' if isinstance(e,(BrokenPipeError,ConnectionResetError)) else str(e))
+            if control.cancelled.is_set():raise GenerationStopped('Response stopped.') from e
             raise
+        finally:
+            with RUN_LOCK:
+                if RUNS.get(turn_id) is control:RUNS.pop(turn_id,None)
     def stream_research(self,payload):
         self.send_response(200);self.send_header('Content-Type','text/event-stream; charset=utf-8');self.send_header('Cache-Control','no-cache');self.send_header('X-Accel-Buffering','no');self.send_header('X-Content-Type-Options','nosniff');self.end_headers()
         def emit(event,data):
             self.wfile.write(('event: '+event+'\ndata: '+json.dumps(data,ensure_ascii=False)+'\n\n').encode());self.wfile.flush()
         try:emit('done',self.persistent_research(payload,emit))
+        except GenerationStopped:
+            try:emit('stopped',{'message':'Response stopped.'})
+            except (BrokenPipeError,ConnectionResetError):pass
         except (BrokenPipeError,ConnectionResetError):pass
         except Exception as e:
             LOG.error('Research stream failed: %s',str(e))
@@ -647,7 +739,7 @@ class Handler(BaseHTTPRequestHandler):
         if origin and origin not in ('http://'+self.headers.get('Host',''),'https://'+self.headers.get('Host','')):return self.respond({'error':'Cross-origin request refused.'},403)
         try:
             size=int(self.headers.get('Content-Length',0))
-            if size>100000:raise ValueError('Request too large.')
+            if size>(2000000 if self.path=='/api/research/stop' else 100000):raise ValueError('Request too large.')
             payload=json.loads(self.rfile.read(size) or '{}')
             if self.path=='/api/login':
                 if not secrets.compare_digest(str(payload.get('token','')),TOKEN):return self.respond({'error':'Access code does not match.'},401)
@@ -656,11 +748,13 @@ class Handler(BaseHTTPRequestHandler):
             if self.path=='/api/search': return self.respond(search(**payload))
             if self.path=='/api/context': return self.respond(context(payload['nodeId'],payload.get('depth',1),bool(payload.get('includeBranch',False))))
             if self.path=='/api/research': return self.respond(self.persistent_research(payload))
+            if self.path=='/api/research/stop':return self.respond(stop_turn(payload['chatId'],payload['turnId'],payload.get('partial')))
             if self.path=='/api/research/stream':return self.stream_research(payload)
             if self.path=='/api/sql': return self.respond(readonly_sql(payload['sql']))
             if self.path=='/api/models': return self.respond(list_models(**payload))
             if self.path=='/api/ping':return self.respond(ping_provider(**payload))
             if self.path=='/api/chat':return self.respond(get_chat(payload['id']))
+            if self.path=='/api/chat/variant':return self.respond(select_variant(payload['chatId'],payload['turnId'],payload['index']))
             if self.path=='/api/chats/manage':return self.respond(manage_chats(**payload))
             if self.path=='/api/settings':
                 return self.respond(save_settings(payload))

@@ -59,7 +59,7 @@ class StreamingTests(unittest.TestCase):
 
     def test_research_stream_verifies_final_citations(self):
         conf={'llm':self.config,'embedding':{},'customInstructions':''}
-        def completion(config,payload,emit):
+        def completion(config,payload,emit,control=None):
             emit('delta',{'answer':'A [381:13]','reasoning':'R'})
             return {'role':'assistant','content':'<think>R</think>A [381:13]'}
         events=[]

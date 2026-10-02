@@ -4,6 +4,22 @@ const $=s=>document.querySelector(s);
 const escapeHTML=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let view='research',busy=false,status={},poll;
 let currentChatId=null,currentChat=null,library={chats:[],folders:[]},folderFilter='all',nameAction=null,deleteAction=null;
+let activeTurnId=null,streamController=null,stopRequested=false,retryTurn=null;
+let streamedPartial={answer:'',reasoning:''};
+const noSearchOption=new Option('No search · just chat','chat');$('#depth').add(noSearchOption);
+const stopButton=document.createElement('button');stopButton.type='button';stopButton.id='stop-response';stopButton.className='secondary';stopButton.textContent='Stop';stopButton.hidden=true;stopButton.disabled=true;$('#submit').after(stopButton);
+const retryButton=document.createElement('button');retryButton.type='button';retryButton.id='retry-response';retryButton.className='text-button';retryButton.textContent='Try again';retryButton.hidden=true;$('#output').after(retryButton);
+const alternatives=document.createElement('div');alternatives.id='response-alternatives';alternatives.hidden=true;retryButton.before(alternatives);
+const bottomButton=document.createElement('button');bottomButton.type='button';bottomButton.id='chat-bottom';bottomButton.className='secondary';bottomButton.setAttribute('aria-label','Scroll to bottom of chat');bottomButton.title='Scroll to bottom';bottomButton.innerHTML=icon('chevron-up');bottomButton.hidden=true;document.body.append(bottomButton);
+bottomButton.onclick=()=>window.scrollTo({top:document.documentElement.scrollHeight,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
+function updateBottomButton(){bottomButton.hidden=!document.body.classList.contains('chat-active')||document.documentElement.scrollHeight-window.innerHeight-window.scrollY<160;}
+window.addEventListener('scroll',updateBottomButton,{passive:true});window.addEventListener('resize',updateBottomButton);
+new ResizeObserver(updateBottomButton).observe($('.desk'));
+function variantControls(turn){const count=turn.variants?.length||0,index=turn.variant_index;return count>1?`<div class="variant-controls" aria-label="Response alternatives"><button type="button" class="text-button variant-previous" data-variant-turn="${escapeHTML(turn.id)}" data-variant-index="${index-1}" aria-label="Previous response" ${index<=0||busy?'disabled':''}>${icon('chevron-up')}</button><span>Response ${index+1} of ${count}</span><button type="button" class="text-button variant-next" data-variant-turn="${escapeHTML(turn.id)}" data-variant-index="${index+1}" aria-label="Next response" ${index>=count-1||busy?'disabled':''}>${icon('chevron-up')}</button></div>`:'';}
+function updateRetryButton(){const last=currentChat?.turns.at(-1);retryButton.hidden=view!=='research'||busy||!last||last.status==='pending';retryButton.disabled=busy;alternatives.hidden=retryButton.hidden||!(last?.variants?.length>1);alternatives.innerHTML=last?variantControls(last):'';}
+document.addEventListener('click',async e=>{const button=e.target.closest('[data-variant-turn]');if(!button||button.disabled||busy)return;try{currentChat=await api('chat/variant',{chatId:currentChatId,turnId:button.dataset.variantTurn,index:Number(button.dataset.variantIndex)});renderChat(currentChat);}catch(e){feedback(e.message,true);}});
+function syncMode(){const direct=view==='research'&&$('#depth').value==='chat';$('#source-options-heading').closest('section').hidden=direct;$('.filters').hidden=view==='saved'||direct;$('#speaker').disabled=direct;$('#skill').disabled=direct;if(view==='research'&&!busy)$('#submit').textContent=document.body.classList.contains('chat-active')?'Send':direct?'Send':'Research';}
+$('#depth').onchange=syncMode;
 const composerDock=document.createElement('div');composerDock.id='composer-dock';composerDock.hidden=true;document.querySelector('main').append(composerDock);
 const dockResize=new ResizeObserver(()=>{document.documentElement.style.setProperty('--composer-height',composerDock.hidden?'0px':composerDock.getBoundingClientRect().height+'px');});dockResize.observe(composerDock);
 const optionsDialog=document.createElement('dialog');optionsDialog.id='research-options-dialog';optionsDialog.innerHTML='<div class="dialog-top"><h2>Research options</h2><button type="button" class="close" aria-label="Close research options">'+icon('x')+'</button></div><div id="research-options-body"><section class="options-section" aria-labelledby="answer-options-heading"><h3 id="answer-options-heading">Answer settings</h3><div id="answer-options"></div></section><section class="options-section" aria-labelledby="source-options-heading"><h3 id="source-options-heading">Source filters</h3><div id="source-options"></div></section></div>';
@@ -30,10 +46,11 @@ function syncChatView(){
   const active=view==='research';$('#chat-toolbar').hidden=!active;$('#chat-history').hidden=!active||!currentChat?.turns.length;$('#current-question').hidden=!active||!currentChat;
   if(!active)conversationLayout(false);
   if(active&&currentChat)renderChat(currentChat);
+  updateRetryButton();updateBottomButton();
 }
 function renderHistory(turns){
   const container=$('#chat-history');container.hidden=!turns.length;
-  container.innerHTML=turns.map(t=>`<article class="chat-turn"><div class="turn-label">YOU</div><p class="user-question">${escapeHTML(t.question)}</p>${t.status==='complete'?`<div class="turn-label">ARCHIVE</div>${t.result.reasoning?`<details class="past-reasoning"><summary>Model reasoning</summary><div class="dialogue-text plain-reasoning">${escapeHTML(t.result.reasoning)}</div></details>`:''}<div class="markdown-answer">${renderAnswer(t.result.answer)}</div>${t.result.citationWarning?'<p class="notice">Check the evidence: this answer has missing or unverified citations.</p>':''}<details><summary>Cited evidence · ${t.result.evidence.length} sources</summary>${t.result.evidence.map(n=>card(n)).join('')}</details>`:`<p class="notice">${escapeHTML(t.error||'This answer is still in progress on the server.')}</p>`}</article>`).join('');
+  container.innerHTML=turns.map(t=>`<article class="chat-turn"><div class="turn-label">YOU</div><p class="user-question">${escapeHTML(t.question)}</p>${t.result&&['complete','stopped'].includes(t.status)?`<div class="turn-label">${t.result.mode==='chat'?'ASSISTANT':'ARCHIVE'}${t.status==='stopped'?' · STOPPED':''}</div>${t.result.reasoning?`<details class="past-reasoning"><summary>Model reasoning</summary><div class="dialogue-text plain-reasoning">${escapeHTML(t.result.reasoning)}</div></details>`:''}<div class="markdown-answer">${renderAnswer(t.result.answer)}</div>${t.result.citationWarning?'<p class="notice">Check the evidence: this answer has missing or unverified citations.</p>':''}${t.result.evidence.length?`<details><summary>Cited evidence · ${t.result.evidence.length} sources</summary>${t.result.evidence.map(n=>card(n)).join('')}</details>`:''}`:`<p class="notice">${escapeHTML(t.error||'This answer is still in progress on the server.')}</p>`}${variantControls(t)}</article>`).join('');
   bindCards(container,turns.flatMap(t=>t.result?.retrieved||t.result?.evidence||[]));
 }
 function renderChat(chat){
@@ -42,7 +59,10 @@ function renderChat(chat){
   const last=chat.turns.at(-1);
   if(last?.status==='complete'){
     renderHistory(chat.turns.slice(0,-1));showResults(last.result);$('#current-question').textContent=last.question;$('#current-question').hidden=false;
-  }else{renderHistory(chat.turns);$('#output').hidden=true;$('#current-question').hidden=true;if(last?.status==='error')feedback('This chat is saved. You can resend the question or ask a follow-up.');}
+  }else if(last?.status==='stopped'&&last.result){renderHistory(chat.turns.slice(0,-1));showResults(last.result);$('#output-title').textContent='Stopped · partial response';$('#current-question').textContent=last.question;$('#current-question').hidden=false;feedback('Response stopped. You can try again or ask a follow-up.');}
+  else{renderHistory(chat.turns);$('#output').hidden=true;$('#current-question').hidden=true;if(last?.status==='error')feedback('This chat is saved. You can try again or ask a follow-up.');}
+  if(last?.request?.depth)$('#depth').value=last.request.depth;
+  updateRetryButton();syncMode();updateBottomButton();
 }
 async function openChat(id){
   if(busy)return;
@@ -62,6 +82,7 @@ function conversationLayout(active){
   if(docked){output.before(question);composerDock.append(form,status);$('#answer-options').append($('.tool-group'));$('#source-options').append(filters);$('#query').placeholder='Ask a follow-up…';}
   else{if(optionsDialog.open)optionsDialog.close();$('.query-tools').prepend($('.tool-group'));$('#chat-history').after(form);form.after(filters);filters.after(question);question.after(status);status.after(output);}
   document.documentElement.style.setProperty('--composer-height',docked?composerDock.getBoundingClientRect().height+'px':'0px');
+  syncMode();updateBottomButton();
 }
 async function refreshLibrary(){
   library=await api('chats');
@@ -201,7 +222,7 @@ async function openContext(id,back=false){
 
 function renderAnswer(text){return renderMarkdown(text);}
 async function streamArchive(payload){
-  const response=await fetch('/api/research/stream',{method:'POST',headers:{'Content-Type':'application/json','Accept':'text/event-stream'},body:JSON.stringify(payload)});
+  const response=await fetch('/api/research/stream',{method:'POST',headers:{'Content-Type':'application/json','Accept':'text/event-stream'},body:JSON.stringify(payload),signal:streamController.signal});
   if(!response.ok){const data=await response.json();if(response.status===401&&!$('#login-dialog').open)$('#login-dialog').showModal();throw Error(data.error||'Research request failed.');}
   if(!response.body)throw Error('Streaming is unavailable in this browser.');
   const reader=response.body.getReader(),decoder=new TextDecoder();let pending='',result=null,roundReason='',completedReasons=[];
@@ -211,10 +232,11 @@ async function streamArchive(payload){
     for(const line of frame.split('\n')){if(line.startsWith('event:'))event=line.slice(6).trim();else if(line.startsWith('data:'))lines.push(line.slice(5).trimStart());}
     if(!lines.length)return;const data=JSON.parse(lines.join('\n'));
     if(event==='error')throw Error(data.error||'The research stream was interrupted.');
-    if(event==='chat'){currentChatId=data.chatId;conversationLayout(true);localStorage.setItem('minnie-current-chat',currentChatId);refreshLibrary().catch(()=>{});}
+    if(event==='stopped'){stopRequested=true;throw new DOMException('Response stopped.','AbortError');}
+    if(event==='chat'){currentChatId=data.chatId;activeTurnId=data.turnId;stopButton.disabled=false;conversationLayout(true);localStorage.setItem('minnie-current-chat',currentChatId);refreshLibrary().catch(()=>{});}
     if(event==='status')feedback(data.message);
-    if(event==='round'){if(roundReason)completedReasons.push(roundReason);roundReason='';$('#answer').textContent='';feedback(data.message);renderReason();}
-    if(event==='delta'){$('#output').hidden=false;$('#output-title').textContent='Research in progress';$('#answer').hidden=false;$('#answer').innerHTML=renderMarkdown(data.answer||'',{citations:false});roundReason=data.reasoning||'';renderReason();}
+    if(event==='round'){if(roundReason)completedReasons.push(roundReason);roundReason='';streamedPartial={answer:'',reasoning:completedReasons.join('\n\n')};$('#answer').textContent='';feedback(data.message);renderReason();}
+    if(event==='delta'){streamedPartial={answer:data.answer||'',reasoning:[...completedReasons,data.reasoning||''].filter(Boolean).join('\n\n')};$('#output').hidden=false;$('#output-title').textContent=payload.depth==='chat'?'Reply in progress':'Research in progress';$('#answer').hidden=false;$('#answer').innerHTML=renderMarkdown(data.answer||'',{citations:false});roundReason=data.reasoning||'';renderReason();}
     if(event==='done')result=data;
   };
   try{
@@ -225,34 +247,42 @@ async function streamArchive(payload){
   }finally{await reader.cancel().catch(()=>{});reader.releaseLock();}
 }
 function showResults(data){
-  $('#output').hidden=false;$('#output-title').textContent=view==='search'?`${data.results.length} dialogue matches`:'Research notes';
+  $('#output').hidden=false;$('#output-title').textContent=view==='search'?`${data.results.length} dialogue matches`:data.mode==='chat'?'Response':'Research notes';
   $('#answer').hidden=view==='search';$('#answer').innerHTML=view==='research'?renderAnswer(data.answer):'';
   $('#reasoning-panel').hidden=view!=='research'||!data.reasoning;$('#reasoning-text').textContent=data.reasoning||'';
   const nodes=data.results||data.evidence;
-  $('#results').innerHTML=(view==='research'?'<div class="section-heading"><h2>Cited evidence</h2><span>Open a line to follow its branch.</span></div>':'')+(nodes.length?nodes.map(n=>card(n)).join(''):'<p class="empty">No matching dialogue found. Try fewer words or a different spelling.</p>');
+  $('#results').innerHTML=data.mode==='chat'||(!nodes.length&&data.mode==='stopped')?'':(view==='research'?'<div class="section-heading"><h2>Cited evidence</h2><span>Open a line to follow its branch.</span></div>':'')+(nodes.length?nodes.map(n=>card(n)).join(''):'<p class="empty">No matching dialogue found. Try fewer words or a different spelling.</p>');
   if(data.suggestion){$('#results').insertAdjacentHTML('afterbegin',`<p class="notice">Did you mean <button class="text-button" id="suggestion">${escapeHTML(data.suggestion)}</button>?</p>`);$('#suggestion').onclick=()=>{$('#query').value=data.suggestion;$('#query-form').requestSubmit();};}
   $('#citation-warning').hidden=!data.citationWarning;$('#citation-warning').textContent='This answer contains missing or unverified citations. Treat it as a research lead and check the dialogue.';
   if(data.trace?.length)$('#results').insertAdjacentHTML('beforeend',`<details><summary>Research trail · ${data.trace.length} follow-up searches</summary><pre>${escapeHTML(data.trace.join('\n'))}</pre></details>`);
   bindCards($('#results'),nodes);bindCards($('#answer'),data.retrieved||[]);
-  feedback(data.semantic?'Lexical and semantic evidence retrieved.':'Lexical retrieval · semantic index not in use.');
+  feedback(data.mode==='chat'?'No search · conversation only.':data.semantic?'Lexical and semantic evidence retrieved.':'Lexical retrieval · semantic index not in use.');
 }
 $('#query-form').onsubmit=async e=>{
   e.preventDefault();const query=$('#query').value.trim();if(!query||busy)return;
+  const retry=retryTurn;retryTurn=null;const depth=retry?.request?.depth||$('#depth').value,verbosity=retry?.request?.verbosity||$('#verbosity').value;
+  stopRequested=false;streamedPartial={answer:'',reasoning:''};activeTurnId=null;streamController=new AbortController();stopButton.hidden=view!=='research';stopButton.disabled=true;$('#submit').hidden=view==='research';retryButton.hidden=true;
   busy=true;document.body.classList.add('chat-busy');$('#submit').disabled=true;$('#starting').hidden=true;$('#output').hidden=true;$('#answer').textContent='';$('#results').textContent='';$('#reasoning-panel').hidden=true;$('#reasoning-panel').open=false;$('#reasoning-text').textContent='';$('#citation-warning').hidden=true;
   if(view==='research'){$('#query').value='';conversationLayout(true);}
   $('#feedback').className='';$('#feedback').innerHTML='<div class="progress-message"><span class="busy-dot"></span>'+(view==='search'?'Searching the archive…':'Following the evidence…')+'</div>';
   try{
-    const common={query,speaker:$('#speaker').value,skill:$('#skill').value};
+    const common={query,speaker:retry?.request?.speaker??$('#speaker').value,skill:retry?.request?.skill??$('#skill').value};
     if(view==='research'){
-      if(currentChatId){currentChat=await api('chat',{id:currentChatId});renderHistory(currentChat.turns);}
+      if(currentChatId){currentChat=await api('chat',{id:currentChatId});renderHistory(retry?currentChat.turns.slice(0,-1):currentChat.turns);}
       $('#current-question').textContent=query;$('#current-question').hidden=false;
     }
-    const data=view==='search'?await api('search',{...common,mode:$('#mode').value,limit:50}):await streamArchive({...common,chatId:currentChatId,folderId:folderFilter==='all'?null:folderFilter,depth:$('#depth').value,verbosity:$('#verbosity').value});
+    const data=view==='search'?await api('search',{...common,mode:$('#mode').value,limit:50}):await streamArchive({...common,chatId:currentChatId,folderId:folderFilter==='all'?null:folderFilter,depth,verbosity,retryTurnId:retry?.id});
     showResults(data);
     if(view==='research'){currentChatId=data.chatId;currentChat=await api('chat',{id:currentChatId});$('#query').placeholder='Ask a follow-up…';$('#chat-title').textContent=currentChat.title;await refreshLibrary();}
-  }catch(err){feedback(err.message,true);if($('#answer').textContent||$('#reasoning-text').textContent){$('#output-title').textContent='Interrupted research · partial output';$('#output').hidden=false;}else $('#starting').hidden=false;}
-  finally{busy=false;document.body.classList.remove('chat-busy');$('#submit').disabled=false;}
+  }catch(err){feedback(stopRequested?'Response stopped.':err.message,!stopRequested);if($('#answer').textContent||$('#reasoning-text').textContent){$('#output-title').textContent=stopRequested?'Stopped · partial response':'Interrupted research · partial output';$('#output').hidden=false;}else $('#starting').hidden=false;}
+  finally{busy=false;activeTurnId=null;streamController=null;document.body.classList.remove('chat-busy');$('#submit').disabled=false;$('#submit').hidden=false;stopButton.hidden=true;stopButton.disabled=true;if(view==='research'&&currentChatId){try{currentChat=await api('chat',{id:currentChatId});renderChat(currentChat);}catch(e){feedback(e.message,true);}}updateRetryButton();updateBottomButton();}
 };
+stopButton.onclick=async()=>{
+  if(!busy||!activeTurnId||stopRequested)return;stopButton.disabled=true;
+  try{const response=await api('research/stop',{chatId:currentChatId,turnId:activeTurnId,partial:streamedPartial});if(response.stopped){stopRequested=true;streamController?.abort();}}
+  catch(e){feedback(e.message,true);stopButton.disabled=false;}
+};
+retryButton.onclick=()=>{const last=currentChat?.turns.at(-1);if(busy||!last||last.status==='pending')return;retryTurn=last;$('#query').value=last.question;$('#query-form').requestSubmit();};
 $('#query').onkeydown=e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){$('#query-form').requestSubmit();e.preventDefault();}};
 $('#clear-output').onclick=()=>{if(view==='research')newChat();else{$('#output').hidden=true;$('#starting').hidden=false;feedback('');}};
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$('#'+b.dataset.close).close());
