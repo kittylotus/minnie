@@ -1,3 +1,4 @@
+import {watchResearch} from './research.js';
 import {initPresetPanel} from './presets.js';
 import {icon} from './icons.js';
 import {renderMarkdown,evidenceMarkdown,evidenceInFolder,evidenceForExport,moveEvidenceItems,unfileEvidenceFolder,contextPlainText} from './markdown.js';
@@ -72,7 +73,7 @@ function renderChat(chat){
 }
 async function openChat(id){
   if(busy)return;
-  try{const chat=await api('chat',{id});currentChat=chat;setView('research');syncChatView();$('#query').value='';localStorage.setItem('minnie-current-chat',id);if($('#chats-dialog').open)$('#chats-dialog').close();}
+  try{const chat=await api('chat',{id});if(busy)return;currentChat=chat;setView('research');syncChatView();$('#query').value='';localStorage.setItem('minnie-current-chat',id);if($('#chats-dialog').open)$('#chats-dialog').close();if(chat.turns.at(-1)?.status==='pending')await resumeResearch(chat);}
   catch(e){feedback(e.message,true);}
 }
 function newChat(){
@@ -227,30 +228,38 @@ async function openContext(id,back=false){
 }
 
 function renderAnswer(text){return renderMarkdown(text);}
+function showResearchSnapshot(data){
+  activeTurnId=data.turnId;stopButton.disabled=data.status!=='pending';
+  streamedPartial={answer:data.answer||'',reasoning:data.reasoning||''};
+  $('#current-question').hidden=false;
+  $('#output').hidden=!(streamedPartial.answer||streamedPartial.reasoning);
+  $('#output-title').textContent='Response in progress';$('#answer').hidden=false;
+  $('#answer').innerHTML=renderMarkdown(streamedPartial.answer,{citations:false});
+  $('#reasoning-panel').hidden=!streamedPartial.reasoning;$('#reasoning-text').textContent=streamedPartial.reasoning;
+  feedback(data.message||'Research is running on your computer…');
+}
+async function observeArchive(identity){
+  currentChatId=identity.chatId;activeTurnId=identity.turnId;stopButton.disabled=false;
+  localStorage.setItem('minnie-current-chat',currentChatId);localStorage.setItem('minnie-pending-research',JSON.stringify(identity));
+  const state=await watchResearch(identity,{signal:streamController.signal,onSnapshot:showResearchSnapshot,onReconnect:()=>feedback('Research continues on your computer. Reconnecting…')});
+  localStorage.removeItem('minnie-pending-research');
+  if(state.status==='stopped'){stopRequested=true;throw new DOMException('Response stopped.','AbortError');}
+  if(state.status==='error')throw Error(state.error||'Research failed.');
+  return state.result;
+}
 async function streamArchive(payload){
-  const response=await fetch('/api/research/stream',{method:'POST',headers:{'Content-Type':'application/json','Accept':'text/event-stream'},body:JSON.stringify(payload),signal:streamController.signal});
-  if(!response.ok){const data=await response.json();if(response.status===401&&!$('#login-dialog').open)$('#login-dialog').showModal();throw Error(data.error||'Research request failed.');}
-  if(!response.body)throw Error('Streaming is unavailable in this browser.');
-  const reader=response.body.getReader(),decoder=new TextDecoder();let pending='',result=null,roundReason='',completedReasons=[];
-  const renderReason=()=>{const text=[...completedReasons,roundReason].filter(Boolean).join('\n\n');$('#reasoning-panel').hidden=!text;$('#reasoning-text').textContent=text;};
-  const consume=frame=>{
-    let event='message';const lines=[];
-    for(const line of frame.split('\n')){if(line.startsWith('event:'))event=line.slice(6).trim();else if(line.startsWith('data:'))lines.push(line.slice(5).trimStart());}
-    if(!lines.length)return;const data=JSON.parse(lines.join('\n'));
-    if(event==='error')throw Error(data.error||'The research stream was interrupted.');
-    if(event==='stopped'){stopRequested=true;throw new DOMException('Response stopped.','AbortError');}
-    if(event==='chat'){currentChatId=data.chatId;activeTurnId=data.turnId;stopButton.disabled=false;conversationLayout(true);localStorage.setItem('minnie-current-chat',currentChatId);refreshLibrary().catch(()=>{});}
-    if(event==='status')feedback(data.message);
-    if(event==='round'){if(roundReason)completedReasons.push(roundReason);roundReason='';streamedPartial={answer:'',reasoning:completedReasons.join('\n\n')};$('#answer').textContent='';feedback(data.message);renderReason();}
-    if(event==='delta'){streamedPartial={answer:data.answer||'',reasoning:[...completedReasons,data.reasoning||''].filter(Boolean).join('\n\n')};$('#output').hidden=false;$('#output-title').textContent=payload.depth==='chat'?'Reply in progress':'Research in progress';$('#answer').hidden=false;$('#answer').innerHTML=renderMarkdown(data.answer||'',{citations:false});roundReason=data.reasoning||'';renderReason();}
-    if(event==='done')result=data;
-  };
-  try{
-    while(true){const {value,done}=await reader.read();pending+=(done?decoder.decode():decoder.decode(value,{stream:true}));pending=pending.replace(/\r\n/g,'\n');let split;while((split=pending.indexOf('\n\n'))!==-1){consume(pending.slice(0,split));pending=pending.slice(split+2);}if(done)break;}
-    if(pending.trim())consume(pending);
-    if(!result)throw Error('The research stream ended before the answer finished. Please retry.');
-    return result;
-  }finally{await reader.cancel().catch(()=>{});reader.releaseLock();}
+  const identity=await api('research/start',payload);conversationLayout(true);refreshLibrary().catch(()=>{});
+  return observeArchive(identity);
+}
+async function resumeResearch(chat){
+  const turn=chat.turns.at(-1);if(busy||turn?.status!=='pending')return;
+  busy=true;stopRequested=false;streamController=new AbortController();document.body.classList.add('chat-busy');
+  $('#submit').hidden=true;$('#submit').disabled=true;stopButton.hidden=false;stopButton.disabled=false;alternatives.hidden=true;
+  renderHistory(chat.turns.slice(0,-1));$('#current-question').textContent=turn.question;$('#current-question').hidden=false;
+  const identity={chatId:chat.id,turnId:turn.id,...(turn.progress?.runId?{runId:turn.progress.runId}:{})};
+  try{await observeArchive(identity);}
+  catch(e){if(!stopRequested)feedback(e.message,true);}
+  finally{busy=false;streamController=null;activeTurnId=null;document.body.classList.remove('chat-busy');$('#submit').hidden=false;$('#submit').disabled=false;stopButton.hidden=true;try{currentChat=await api('chat',{id:chat.id});renderChat(currentChat);await refreshLibrary();}catch(e){feedback(e.message,true);}updateRetryButton();}
 }
 function showResults(data){
   $('#output').hidden=false;$('#output-title').textContent=view==='search'?`${data.results.length} dialogue matches`:data.mode==='chat'?'Response':'Research notes';
@@ -374,6 +383,9 @@ $('#save-access-password').onclick=async()=>{
   finally{button.disabled=false;}
 };
 $('#login-form').onsubmit=async e=>{e.preventDefault();try{const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:$('#access-code').value})});if(!r.ok)throw Error((await r.json()).error);$('#login-dialog').close();$('#access-code').value='';await initializeChats();}catch(e){$('#login-error').textContent=e.message;}};
-async function initializeChats(){await refreshStatus();if(!status.nodes)return;try{await presetPanel.refresh();await refreshLibrary();const id=localStorage.getItem('minnie-current-chat');if(id&&library.chats.some(c=>c.id===id))await openChat(id);}catch(e){feedback(e.message,true);}}
+async function initializeChats(){await refreshStatus();if(!status.nodes)return;try{await presetPanel.refresh();await refreshLibrary();const id=localStorage.getItem('minnie-current-chat');if(id&&library.chats.some(c=>c.id===id))await openChat(id);else{const pending=await api('research/active');if(pending.length)await openChat(pending[0].chatId);}}catch(e){feedback(e.message,true);}}
 initializeChats();
 
+
+window.addEventListener('pageshow',()=>{if(!busy&&currentChatId)openChat(currentChatId);});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&!busy&&currentChatId)openChat(currentChatId);});

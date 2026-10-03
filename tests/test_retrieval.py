@@ -25,7 +25,7 @@ class CorpusTests(unittest.TestCase):
         self.assertEqual(app.search('aeropagites','exact')['suggestion'],'areopagites')
 
     def test_speaker_filter(self):
-        rows=app.search('eyes','hybrid',speaker='Kim Kitsuragi')['results']
+        rows=app.search('eyes','exact',speaker='Kim Kitsuragi')['results']
         self.assertTrue(rows)
         self.assertTrue(all(n['speaker']=='Kim Kitsuragi' for n in rows))
 

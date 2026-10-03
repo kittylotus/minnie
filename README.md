@@ -60,7 +60,9 @@ Answers render Markdown while reasoning remains plain text. Markdown supports he
 
 In the research options, choose **No search** under Depth for general questions, editing, or formatting. This mode sends the question and completed chat history to the answer model without searching, embedding, expanding dialogue context, or offering database tools. It does not require an embedding provider. Answer length and enabled preset blocks still apply. Choose Quick, Research, or Exhaustive again to resume archive research.
 
-The floating down button jumps to the bottom of a chat and appears when you scroll away from the end. It sits above the composer on desktop and mobile. **Stop** replaces Send while a response is running. Stopping closes the provider stream where possible, prevents further research rounds, and saves received text as a labeled partial response; the provider may already be processing an in-flight request. Stopped partial answers are readable but are not fed back as completed chat context.
+The floating down button jumps to the bottom of a chat and appears when you scroll away from the end. It sits above the composer on desktop and mobile. **Stop** replaces Send while a response is running. Stopping closes the provider stream where possible, prevents further research rounds, and saves the latest server text as a labeled partial response; the provider may already be processing an in-flight request. Stopped partial answers are readable but are not fed back as completed chat context.
+
+Research runs independently on the computer hosting Minnie. Switching to Discord, locking your phone, closing the viewer, or losing its stream does not cancel the research. When the page returns to the foreground it reconnects to the same job and catches up with the current answer, reasoning, and progress. Reopening a pending chat after a browser reload also resumes viewing it. Completed responses remain saved in chat history. No audio playback or music interruption is needed. Keep Minnie and its host computer running: shutting down/restarting the host still interrupts unfinished research. Provider failures remain errors with the existing retry option.
 
 The centered response controls show **‹ Response 1 of 1 ›** even for a single answer. At the last alternative, the right caret acts as **Try again** and generates another response to the latest question using its original mode, answer length, and source filters. It keeps earlier responses rather than replacing them. Use the previous/next controls to compare alternatives, including after reopening the chat. The selected completed alternative is used for follow-up context. Failed or stopped alternatives also remain available for comparison. Older chats retain their original answer when retried; comparison is disabled while a response is generating.
 
@@ -95,4 +97,5 @@ For evidence organization and export checks (requires Node.js):
 ```powershell
 node tests/test_evidence.mjs
 node tests/test_citations.mjs
+node tests/test_research_stream.mjs
 ```
