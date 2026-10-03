@@ -1,3 +1,4 @@
+import {initPresetPanel} from './presets.js';
 import {icon} from './icons.js';
 import {renderMarkdown,evidenceMarkdown,evidenceInFolder,evidenceForExport,moveEvidenceItems,unfileEvidenceFolder,contextPlainText} from './markdown.js';
 const $=s=>document.querySelector(s);
@@ -40,6 +41,7 @@ let reading=JSON.parse(localStorage.getItem('minnie-reading')||'{"brightness":11
 function applyReading(){const b=reading.brightness;document.documentElement.style.setProperty('--text',`rgb(${b},${b+2},${b-3})`);document.documentElement.style.setProperty('--body-size',reading.size+'px');document.documentElement.style.setProperty('--leading',reading.spacing/10);$('#brightness').value=b;$('#font-size').value=reading.size;$('#line-spacing').value=reading.spacing;}
 applyReading();
 async function api(path,body){const r=await fetch('/api/'+path,body!==undefined?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});const value=await r.json();if(!r.ok){if(r.status===401&&!$('#login-dialog').open)$('#login-dialog').showModal();throw Error(value.error||'Request failed.');}return value;}
+const presetPanel=initPresetPanel({api,icon});
 function feedback(text,error=false){$('#feedback').textContent=text;$('#feedback').className=error?'error':'';}
 function setView(next){if(busy)return;view=next;document.querySelectorAll('[data-view]').forEach(b=>{const active=b.dataset.view===view;b.classList.toggle('active',active);if(b.hasAttribute('role'))b.setAttribute('aria-selected',active)});const shelf=view==='saved';$('#page-label').textContent=shelf?'SAVED EVIDENCE':view==='search'?'DIALOGUE SEARCH':'RESEARCH';$('#heading').textContent=shelf?'Keep the receipts.':view==='search'?'Find the words.':'Follow a thread.';$('#intro').textContent=shelf?'A shelf for the lines you want to come back to.':view==='search'?'The dialogue itself. Exact terms, a speaker, a line you remember.':'A question, a half-remembered line, a very specific rabbit hole.';$('.tabs').hidden=shelf;$('#query-form').hidden=shelf;$('.filters').hidden=shelf;$('#saved-view').hidden=!shelf;$('#starting').hidden=shelf;$('#output').hidden=true;$('#depth-wrap').hidden=view!=='research';$('#verbosity-wrap').hidden=view!=='research';$('#mode-wrap').hidden=view!=='search';$('#submit').textContent=view==='search'?'Search':'Research';$('#query').placeholder=view==='search'?'A phrase, a name, a fragment of dialogue…':'What does the game say about memory and the Pale?';feedback('');if(shelf)renderSaved();}
 document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{if(busy)return;setView(b.dataset.view);syncChatView();});
@@ -275,7 +277,7 @@ $('#query-form').onsubmit=async e=>{
       if(currentChatId){currentChat=await api('chat',{id:currentChatId});renderHistory(retry?currentChat.turns.slice(0,-1):currentChat.turns);}
       $('#current-question').textContent=query;$('#current-question').hidden=false;
     }
-    const data=view==='search'?await api('search',{...common,mode:$('#mode').value,limit:50}):await streamArchive({...common,chatId:currentChatId,folderId:folderFilter==='all'?null:folderFilter,depth,verbosity,retryTurnId:retry?.id});
+    const data=view==='search'?await api('search',{...common,mode:$('#mode').value,limit:50}):await streamArchive({...common,chatId:currentChatId,folderId:folderFilter==='all'?null:folderFilter,depth,verbosity,presetId:retry?.request?.presetId||presetPanel.id,retryTurnId:retry?.id});
     showResults(data);
     if(view==='research'){currentChatId=data.chatId;currentChat=await api('chat',{id:currentChatId});$('#query').placeholder='Ask a follow-up…';$('#chat-title').textContent=currentChat.title;await refreshLibrary();}
   }catch(err){feedback(stopRequested?'Response stopped.':err.message,!stopRequested);if($('#answer').textContent||$('#reasoning-text').textContent){$('#output-title').textContent=stopRequested?'Stopped · partial response':'Interrupted research · partial output';$('#output').hidden=false;}else $('#starting').hidden=false;}
@@ -292,13 +294,12 @@ document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$('#'+b.datas
 $('#reading-open').onclick=()=>$('#reading-dialog').showModal();
 for(const [id,key]of[['brightness','brightness'],['font-size','size'],['line-spacing','spacing']])$('#'+id).oninput=e=>{reading[key]=+e.target.value;applyReading();localStorage.setItem('minnie-reading',JSON.stringify(reading));};
 $('#reset-reading').onclick=()=>{reading={brightness:112,size:19,spacing:18};applyReading();localStorage.setItem('minnie-reading',JSON.stringify(reading));};
-$('#settings-open').onclick=async()=>{try{const conf=await api('settings');const f=$('#settings-form');for(const kind of['llm','embedding']){f.elements[kind+'-url'].value=conf[kind]?.baseUrl||'';f.elements[kind+'-model'].value=conf[kind]?.model||'';f.elements[kind+'-key'].value='';f.elements[kind+'-key'].placeholder=conf[kind]?.hasKey?'Saved · leave blank to keep':'API key';}f.elements.instructions.value=conf.customInstructions||'';$('#new-access-password').value='';$('#confirm-access-password').value='';$('#access-password-feedback').textContent='';$('#access-password-state').textContent=conf.access?.passwordSet?'A custom access password is set.':conf.access?.generatedCode?'Initial access code: '+conf.access.generatedCode:'Choose an access password that is easy to enter on your phone.';$('#settings-dialog').showModal();}catch(e){feedback(e.message,true);}};
+$('#settings-open').onclick=async()=>{try{const conf=await api('settings');const f=$('#settings-form');for(const kind of['llm','embedding']){f.elements[kind+'-url'].value=conf[kind]?.baseUrl||'';f.elements[kind+'-model'].value=conf[kind]?.model||'';f.elements[kind+'-key'].value='';f.elements[kind+'-key'].placeholder=conf[kind]?.hasKey?'Saved · leave blank to keep':'API key';}$('#new-access-password').value='';$('#confirm-access-password').value='';$('#access-password-feedback').textContent='';$('#access-password-state').textContent=conf.access?.passwordSet?'A custom access password is set.':conf.access?.generatedCode?'Initial access code: '+conf.access.generatedCode:'Choose an access password that is easy to enter on your phone.';$('#settings-dialog').showModal();}catch(e){feedback(e.message,true);}};
 function providerFields(kind){const f=$('#settings-form');return {baseUrl:f.elements[kind+'-url'].value.trim(),model:f.elements[kind+'-model'].value.trim(),apiKey:f.elements[kind+'-key'].value};}
 async function saveSettings(kind){
-  const f=$('#settings-form');const body=kind?{[kind]:providerFields(kind)}:{customInstructions:f.elements.instructions.value};
+  const f=$('#settings-form');if(!kind)return;const body={[kind]:providerFields(kind)};
   await api('settings',body);
   if(kind){const key=f.elements[kind+'-key'];if(key.value)key.placeholder='Saved · leave blank to keep';key.value='';$('#'+kind+'-provider-status').textContent='Provider saved.';}
-  else $('#settings-feedback').textContent='Custom instructions saved.';
   if(kind==='embedding')await refreshStatus();
 }
 $('#settings-form').onsubmit=async e=>{e.preventDefault();try{await saveSettings();}catch(e){$('#settings-feedback').textContent=e.message;}};
@@ -373,6 +374,6 @@ $('#save-access-password').onclick=async()=>{
   finally{button.disabled=false;}
 };
 $('#login-form').onsubmit=async e=>{e.preventDefault();try{const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:$('#access-code').value})});if(!r.ok)throw Error((await r.json()).error);$('#login-dialog').close();$('#access-code').value='';await initializeChats();}catch(e){$('#login-error').textContent=e.message;}};
-async function initializeChats(){await refreshStatus();if(!status.nodes)return;try{await refreshLibrary();const id=localStorage.getItem('minnie-current-chat');if(id&&library.chats.some(c=>c.id===id))await openChat(id);}catch(e){feedback(e.message,true);}}
+async function initializeChats(){await refreshStatus();if(!status.nodes)return;try{await presetPanel.refresh();await refreshLibrary();const id=localStorage.getItem('minnie-current-chat');if(id&&library.chats.some(c=>c.id===id))await openChat(id);}catch(e){feedback(e.message,true);}}
 initializeChats();
 

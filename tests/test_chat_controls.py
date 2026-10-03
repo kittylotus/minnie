@@ -12,6 +12,9 @@ class ChatControlTests(unittest.TestCase):
         self.path=app.DATA/('chat-controls-'+uuid.uuid4().hex+'.sqlite')
         self.addCleanup(lambda:self.path.unlink(missing_ok=True))
         patcher=patch.object(app,'CHATS',self.path);patcher.start();self.addCleanup(patcher.stop)
+        presets=self.path.with_suffix('.presets.json')
+        self.addCleanup(lambda:presets.unlink(missing_ok=True))
+        patcher=patch.object(app,'PRESETS',presets);patcher.start();self.addCleanup(patcher.stop)
 
     def result(self,text):
         return {'answer':text,'reasoning':'','evidence':[],'retrieved':[],'trace':[],'citationWarning':False,'semantic':False,'mode':'chat'}

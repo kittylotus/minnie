@@ -12,6 +12,8 @@ export function evidenceMarkdown(nodes){
   return [...conversations].map(([id,group])=>`## ${group.title} (conversation ${id})\n\n${group.lines.join('\n\n')}`).join('\n\n- - -\n\n')+(nodes.length?'\n':'');
 }
 
+export function citationGroups(text){return [...String(text).matchAll(/\[\s*\d+:\d+(?:\s*[,;]\s*\d+:\d+)*\s*\]/g)].map(m=>({text:m[0],index:m.index,ids:m[0].match(/\d+:\d+/g)}));}
+
 export function renderMarkdown(text,{citations=true}={}){
   const html=marked.parse(String(text||''),{gfm:true,breaks:false});
   const clean=DOMPurify.sanitize(html,{USE_PROFILES:{html:true},ALLOW_DATA_ATTR:false,FORBID_TAGS:['img','input','form','button','style','iframe'],FORBID_ATTR:['style']});
@@ -21,8 +23,8 @@ export function renderMarkdown(text,{citations=true}={}){
     const walker=document.createTreeWalker(holder,NodeFilter.SHOW_TEXT);const nodes=[];
     while(walker.nextNode())if(!walker.currentNode.parentElement.closest('pre,code,a'))nodes.push(walker.currentNode);
     for(const node of nodes){
-      const regex=/\[(\d+:\d+)\]/g;const text=node.textContent;let match,start=0;const fragment=document.createDocumentFragment();
-      while((match=regex.exec(text))){fragment.append(document.createTextNode(text.slice(start,match.index)));const b=document.createElement('button');b.className='citation';b.dataset.context=match[1];b.setAttribute('aria-label','Open source '+match[1]);b.textContent=match[0];fragment.append(b);start=regex.lastIndex;}
+      const text=node.textContent;let start=0;const fragment=document.createDocumentFragment();
+      for(const group of citationGroups(text)){fragment.append(document.createTextNode(text.slice(start,group.index)));group.ids.forEach((id,index)=>{if(index)fragment.append(document.createTextNode(' '));const b=document.createElement('button');b.className='citation';b.dataset.context=id;b.setAttribute('aria-label','Open source '+id);b.textContent='['+id+']';fragment.append(b);});start=group.index+group.text.length;}
       if(start){fragment.append(document.createTextNode(text.slice(start)));node.replaceWith(fragment);}
     }
   }
