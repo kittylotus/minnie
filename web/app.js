@@ -311,7 +311,7 @@ document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$('#'+b.datas
 $('#reading-open').onclick=()=>$('#reading-dialog').showModal();
 for(const [id,key]of[['brightness','brightness'],['font-size','size'],['line-spacing','spacing']])$('#'+id).oninput=e=>{reading[key]=+e.target.value;applyReading();localStorage.setItem('minnie-reading',JSON.stringify(reading));};
 $('#reset-reading').onclick=()=>{reading={brightness:112,size:19,spacing:18};applyReading();localStorage.setItem('minnie-reading',JSON.stringify(reading));};
-$('#settings-open').onclick=async()=>{try{const conf=await api('settings');const f=$('#settings-form');for(const kind of['llm','embedding']){f.elements[kind+'-url'].value=conf[kind]?.baseUrl||'';f.elements[kind+'-model'].value=conf[kind]?.model||'';f.elements[kind+'-key'].value='';f.elements[kind+'-key'].placeholder=conf[kind]?.hasKey?'Saved · leave blank to keep':'API key';}$('#new-access-password').value='';$('#confirm-access-password').value='';$('#access-password-feedback').textContent='';$('#access-password-state').textContent=conf.access?.passwordSet?'A custom access password is set.':conf.access?.generatedCode?'Initial access code: '+conf.access.generatedCode:'Choose an access password that is easy to enter on your phone.';$('#settings-dialog').showModal();}catch(e){feedback(e.message,true);}};
+$('#settings-open').onclick=async()=>{try{const [conf,theme]=await Promise.all([api('settings'),api('theme')]);$('#custom-css').value=theme.css;$('#custom-css-enabled').checked=theme.enabled;$('#custom-css-status').textContent=window.minnieDefaultTheme?'Default theme recovery is active for this page.':'';const f=$('#settings-form');for(const kind of['llm','embedding']){f.elements[kind+'-url'].value=conf[kind]?.baseUrl||'';f.elements[kind+'-model'].value=conf[kind]?.model||'';f.elements[kind+'-key'].value='';f.elements[kind+'-key'].placeholder=conf[kind]?.hasKey?'Saved · leave blank to keep':'API key';}$('#new-access-password').value='';$('#confirm-access-password').value='';$('#access-password-feedback').textContent='';$('#access-password-state').textContent=conf.access?.passwordSet?'A custom access password is set.':conf.access?.generatedCode?'Initial access code: '+conf.access.generatedCode:'Choose an access password that is easy to enter on your phone.';$('#settings-dialog').showModal();}catch(e){feedback(e.message,true);}};
 function providerFields(kind){const f=$('#settings-form');return {baseUrl:f.elements[kind+'-url'].value.trim(),model:f.elements[kind+'-model'].value.trim(),apiKey:f.elements[kind+'-key'].value};}
 async function saveSettings(kind){
   const f=$('#settings-form');if(!kind)return;const body={[kind]:providerFields(kind)};
@@ -397,3 +397,13 @@ initializeChats();
 
 window.addEventListener('pageshow',()=>{if(!busy&&currentChatId)openChat(currentChatId);});
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&!busy&&currentChatId)openChat(currentChatId);});
+
+$('#save-custom-css').onclick=async()=>{
+  const button=$('#save-custom-css'),message=$('#custom-css-status');button.disabled=true;
+  try{
+    await api('theme',{css:$('#custom-css').value,enabled:$('#custom-css-enabled').checked});
+    const link=document.getElementById('custom-theme');
+    if(link)link.href='/custom.css?v='+Date.now();
+    message.textContent=window.minnieDefaultTheme?'Saved. Default theme recovery is active; open Minnie normally to see your changes.':'Stylesheet saved and applied.';
+  }catch(e){message.textContent=e.message;}finally{button.disabled=false;}
+};

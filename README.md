@@ -99,3 +99,19 @@ node tests/test_evidence.mjs
 node tests/test_citations.mjs
 node tests/test_research_stream.mjs
 ```
+
+## Personal fonts and theme
+
+Use **Settings → Custom stylesheet** to edit CSS and **Save stylesheet** to apply it immediately. Overrides load after the built-in styles and apply on desktop and phone. The enable switch lets you turn them off while keeping your CSS. They live in ignored `data/custom.css` (with the switch in `data/theme.json`), so normal Git pulls keep your tweaks. You can also edit `data/custom.css` directly and refresh the page.
+
+For example, change the reading font:
+
+```css
+#query, #answer, .markdown-answer, .dialogue-text, .user-question, .reading-sample {
+  font-family: "Palatino Linotype", Palatino, Georgia, serif;
+}
+```
+
+Use fonts installed on each device, or supply your own `@font-face` / `@import` URL. Reading controls set `--text`, `--body-size` and `--leading` inline; an override such as `:root { --body-size: 21px !important; }` takes priority.
+
+If a CSS experiment hides the controls, open `/?theme=default` on your Minnie address. This bypasses custom CSS for that page so you can repair or disable it in Settings, then return to the normal URL.

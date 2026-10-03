@@ -11,6 +11,9 @@ INDEX = DATA / 'normalized.sqlite'
 CONFIG = DATA / 'settings.json'
 CHATS = DATA / 'chats.sqlite'
 ACCESS = DATA / 'access.json'
+CUSTOM_CSS=DATA/'custom.css'
+THEME=DATA/'theme.json'
+THEME_LOCK=threading.Lock()
 PRESETS=DATA/'presets.json'
 PRESET_LOCK=threading.Lock()
 MAIN_PROMPT='You research the Disco Elysium Jamais Vu corpus. All game facts must be supported by retrieved dialogue, not recalled training data. Cite every factual claim using only source IDs returned by tools. Clearly label inference. Do not invent lore or relationships. Explain when evidence is insufficient. Preserve attribution: an NPC claim is not necessarily an objective fact. Use tools to investigate. Search again if evidence is weak. Try ordinary words, synonyms, and alternate phrasings as well as specialist terms; do not claim exhaustive coverage without checking. Prior assistant answers are conversation context, not independent evidence. Resolve follow-up questions using chat history and additional supporting dialogue.'
@@ -78,6 +81,20 @@ def configure_logging():
     for handler in (logging.StreamHandler(),logging.handlers.RotatingFileHandler(DATA/'minnie.log',maxBytes=2_000_000,backupCount=3,encoding='utf-8')):
         handler.setFormatter(formatter);LOG.addHandler(handler)
     LOG.info('Minnie is starting. Diagnostic log: %s',DATA/'minnie.log')
+
+def load_theme():
+    with THEME_LOCK:
+        enabled=json.loads(THEME.read_text(encoding='utf-8')).get('enabled',True) if THEME.exists() else True
+        return {'css':CUSTOM_CSS.read_text(encoding='utf-8') if CUSTOM_CSS.exists() else '', 'enabled':enabled}
+
+def save_theme(payload):
+    css=payload.get('css');enabled=payload.get('enabled',True)
+    if not isinstance(css,str) or len(css.encode('utf-8'))>60000:raise ValueError('Custom CSS must be text, up to 60 KB.')
+    if not isinstance(enabled,bool):raise ValueError('Enabled must be true or false.')
+    with THEME_LOCK:
+        for path,content in ((CUSTOM_CSS,css),(THEME,json.dumps({'enabled':enabled}))):
+            temporary=path.with_suffix('.tmp');temporary.write_text(content,encoding='utf-8');temporary.replace(path)
+    return {'saved':True}
 
 def password_hash(password,salt):
     return hashlib.pbkdf2_hmac('sha256',password.encode('utf-8'),bytes.fromhex(salt),260000).hex()
@@ -895,6 +912,12 @@ class Handler(BaseHTTPRequestHandler):
         return 'minnie' in cookie and secrets.compare_digest(cookie['minnie'].value.encode('utf-8'),load_access()['sessionToken'].encode('utf-8'))
     def do_GET(self):
         path=self.path.split('?')[0]
+        if path=='/custom.css':
+            theme=load_theme()
+            return self.respond((theme['css'] if theme['enabled'] else '').encode('utf-8'),kind='text/css; charset=utf-8')
+        if path=='/api/theme':
+            if not self.authorized():return self.respond({'error':'Access code required.'},401)
+            return self.respond(load_theme())
         if path=='/api/status':
             if not self.authorized():return self.respond({'error':'Enter the access code shown on the desktop.'},401)
             with db() as c:
@@ -926,7 +949,7 @@ class Handler(BaseHTTPRequestHandler):
         if path=='/api/chats':
             if not self.authorized():return self.respond({'error':'Access code required.'},401)
             return self.respond(chat_list())
-        files={'/research.js':('research.js','text/javascript; charset=utf-8'),'/presets.js':('presets.js','text/javascript; charset=utf-8'),'/icons.js':('icons.js','text/javascript; charset=utf-8'),'/vendor/lucide.svg':('vendor/lucide.svg','image/svg+xml'),'/':('index.html','text/html; charset=utf-8'),'/app.js':('app.js','text/javascript; charset=utf-8'),'/markdown.js':('markdown.js','text/javascript; charset=utf-8'),'/vendor/marked.esm.js':('vendor/marked.esm.js','text/javascript; charset=utf-8'),'/vendor/purify.es.mjs':('vendor/purify.es.mjs','text/javascript; charset=utf-8'),'/style.css':('style.css','text/css; charset=utf-8'),'/favicon.svg':('favicon.svg','image/svg+xml')}
+        files={'/theme.js':('theme.js','text/javascript; charset=utf-8'),'/research.js':('research.js','text/javascript; charset=utf-8'),'/presets.js':('presets.js','text/javascript; charset=utf-8'),'/icons.js':('icons.js','text/javascript; charset=utf-8'),'/vendor/lucide.svg':('vendor/lucide.svg','image/svg+xml'),'/':('index.html','text/html; charset=utf-8'),'/app.js':('app.js','text/javascript; charset=utf-8'),'/markdown.js':('markdown.js','text/javascript; charset=utf-8'),'/vendor/marked.esm.js':('vendor/marked.esm.js','text/javascript; charset=utf-8'),'/vendor/purify.es.mjs':('vendor/purify.es.mjs','text/javascript; charset=utf-8'),'/style.css':('style.css','text/css; charset=utf-8'),'/favicon.svg':('favicon.svg','image/svg+xml')}
         if path in files:
             name,kind=files[path];return self.respond((ROOT/'web'/name).read_bytes(),kind=kind)
         self.respond({'error':'Not found'},404)
@@ -945,6 +968,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path=='/api/access/password':
                 token=change_access_password(payload.get('password'),payload.get('confirmation'))
                 return self.respond({'saved':True},headers={'Set-Cookie':self.access_cookie(token)})
+            if self.path=='/api/theme':return self.respond(save_theme(payload))
             if self.path=='/api/presets/manage':return self.respond(manage_presets(payload))
             if self.path=='/api/search': return self.respond(search(**payload))
             if self.path=='/api/context': return self.respond(context(payload['nodeId'],payload.get('depth',1),bool(payload.get('includeBranch',False))))
