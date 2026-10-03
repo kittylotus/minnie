@@ -18,8 +18,9 @@ window.addEventListener('scroll',updateBottomButton,{passive:true});window.addEv
 new ResizeObserver(updateBottomButton).observe($('.desk'));
 function variantControls(turn,allowRetry=false){
   const count=Math.max(1,turn.variants?.length||0),index=Math.max(0,turn.variant_index??0),generate=allowRetry&&index===count-1;
-  if(count===1&&!allowRetry)return '';
-  return `<div class="variant-controls" aria-label="Response alternatives"><button type="button" class="text-button variant-previous" data-variant-turn="${escapeHTML(turn.id)}" data-variant-index="${index-1}" aria-label="Previous response" title="Previous response" ${index<=0||busy?'disabled':''}>${icon('chevron-up')}</button><span>Response ${index+1} of ${count}</span><button type="button" class="text-button variant-next" data-variant-turn="${escapeHTML(turn.id)}" data-variant-index="${index+1}" ${generate?'data-retry-response="true"':''} aria-label="${generate?'Try again: generate another response':'Next response'}" title="${generate?'Try again':'Next response'}" ${busy||(!generate&&index>=count-1)?'disabled':''}>${icon('chevron-up')}</button></div>`;
+  const copy=turn.result?.answer?`<button type="button" class="text-button response-copy" data-copy-response="${escapeHTML(turn.id)}" aria-label="Copy response as Markdown" title="Copy response as Markdown">${icon('copy')}</button>`:'<span></span>';
+  const navigation=count===1&&!allowRetry?'':`<div class="variant-controls" aria-label="Response alternatives"><button type="button" class="text-button variant-previous" data-variant-turn="${escapeHTML(turn.id)}" data-variant-index="${index-1}" aria-label="Previous response" title="Previous response" ${index<=0||busy?'disabled':''}>${icon('chevron-up')}</button><span>Response ${index+1} of ${count}</span><button type="button" class="text-button variant-next" data-variant-turn="${escapeHTML(turn.id)}" data-variant-index="${index+1}" ${generate?'data-retry-response="true"':''} aria-label="${generate?'Try again: generate another response':'Next response'}" title="${generate?'Try again':'Next response'}" ${busy||(!generate&&index>=count-1)?'disabled':''}>${icon('chevron-up')}</button></div>`;
+  return navigation||turn.result?.answer?`<div class="response-action-row">${copy}${navigation}<span aria-hidden="true"></span></div>`:'';
 }
 function updateRetryButton(){const last=currentChat?.turns.at(-1);alternatives.hidden=view!=='research'||busy||!last||last.status==='pending';alternatives.innerHTML=last?variantControls(last,true):'';}
 function retryLatestResponse(){const last=currentChat?.turns.at(-1);if(busy||!last||last.status==='pending')return;retryTurn=last;$('#query').value=last.question;$('#query-form').requestSubmit();}
@@ -179,6 +180,13 @@ function lineDetails(n){
   return html;
 }
 function manualCopy(text){$('#evidence-export-text').value=text;$('#copy-evidence-dialog').showModal();$('#evidence-export-text').focus();$('#evidence-export-text').select();}
+const responseCopyStatus=document.createElement('span');responseCopyStatus.className='sr-only';responseCopyStatus.setAttribute('role','status');document.body.append(responseCopyStatus);
+document.addEventListener('click',async e=>{
+  const button=e.target.closest('[data-copy-response]');if(!button)return;
+  const answer=currentChat?.turns.find(t=>t.id===button.dataset.copyResponse)?.result?.answer;if(!answer)return;
+  try{if(!navigator.clipboard?.writeText)throw Error('Clipboard unavailable');await navigator.clipboard.writeText(answer);button.innerHTML=icon('check');button.title='Markdown copied';responseCopyStatus.textContent='Response copied as Markdown.';setTimeout(()=>{if(button.isConnected){button.innerHTML=icon('copy');button.title='Copy response as Markdown';}},2000);}
+  catch{manualCopy(answer);responseCopyStatus.textContent='Response Markdown is ready for manual copying.';}
+});
 $('#copy-dialogue-context').onclick=async()=>{
   const text=$('#evidence-title').textContent+'\n\n'+contextPlainText($('#evidence-body'));
   try{if(!navigator.clipboard?.writeText)throw Error('Clipboard unavailable');await navigator.clipboard.writeText(text);$('#context-copy-status').textContent='Full dialogue context copied.';}
