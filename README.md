@@ -115,3 +115,7 @@ For example, change the reading font:
 Use fonts installed on each device, or supply your own `@font-face` / `@import` URL. Reading controls set `--text`, `--body-size` and `--leading` inline; an override such as `:root { --body-size: 21px !important; }` takes priority.
 
 If a CSS experiment hides the controls, open `/?theme=default` on your Minnie address. This bypasses custom CSS for that page so you can repair or disable it in Settings, then return to the normal URL.
+
+## Bundled restyle
+
+The interface bundles Crimson Pro for reading text and Roboto Condensed for uppercase interface accents, with SIL Open Font License files in `web/fonts/`. Fonts are served locally; no external font service is needed. Reading preferences also include bottom-fade color, intensity and length. These settings remain browser-local and reset independently from reading size, brightness and line spacing. Existing reading preferences are preserved; new devices start at a 12px reading size.
