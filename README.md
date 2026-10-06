@@ -119,3 +119,11 @@ If a CSS experiment hides the controls, open `/?theme=default` on your Minnie ad
 ## Bundled restyle
 
 The interface bundles Crimson Pro for reading text and Roboto Condensed for uppercase interface accents, with SIL Open Font License files in `web/fonts/`. Fonts are served locally; no external font service is needed. Reading preferences also include bottom-fade color, intensity and length. These settings remain browser-local and reset independently from reading size, brightness and line spacing. Existing reading preferences are preserved; new devices start at a 12px reading size.
+
+## Consolidating conversations
+
+Use the **Consolidate** tab to filter conversations by title or ID, select up to ten, and edit the summary instructions. **Summarize in a new chat** creates a normal saved chat with streaming output, citations, Markdown copy, follow-ups, Stop, and response alternatives. The instructions are saved on this browser; **Reset prompt** restores the default. **Summarize this conversation** in dialogue context selects that conversation and opens Consolidate so you can review the prompt before starting.
+
+This reads every source record in the selected conversations, including blank routing nodes, all mutually exclusive branches, conditions, alternate lines, scripts, checks, modifiers, loops, and outgoing links. External links are marked as boundaries; their destination conversations are read only if you select them too. No semantic index or search is used. Large trees are supplied in chunks, with sourced working notes combined before the final summary. Coverage lists record and chunk counts. The model can still omit or misunderstand facts; citations and coverage are aids for review, not a guarantee of exhaustive factual accuracy.
+
+Selected dialogue is sent to your saved answer provider. Large trees can require many requests and incur provider charges. Background work, stopping, and reconnecting use the existing research-job system. Retry preserves the selected conversation IDs and original instructions; it adds a response alternative. The final summary is saved, while intermediate working notes are not stored as chat messages.

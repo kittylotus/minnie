@@ -1,3 +1,4 @@
+import {initConsolidate} from './consolidate.js';
 import {watchResearch} from './research.js';
 import {initPresetPanel} from './presets.js';
 import {icon} from './icons.js';
@@ -7,11 +8,11 @@ const escapeHTML=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;'
 const researchPageIcon=$('#page-symbol').innerHTML;
 // User-facing section copy lives here so view wording is easy to find and revise.
 const UI_COPY=Object.freeze({
-  section:{research:'FAYDE PLAYBACK',search:'BRANCH INSPECTOR',saved:'SAVED EVIDENCE'},
+  section:{research:'FAYDE PLAYBACK',search:'BRANCH INSPECTOR',saved:'SAVED EVIDENCE',consolidate:'CONSOLIDATE'},
   newChat:'Enter a query or browse past sessions.',
   researchPlaceholder:"What was declared during the transmission of le Décret de Mars in '02?",
-  heading:{research:'Start a new session.',search:'Pick through the corpus.',saved:'Keep the receipts.'},
-  intro:{research:'Take the long and scenic route with a full session at the research desk.',search:'Search for exact terms, speakers, or a line you vaguely remember.',saved:'A shelf for the lines you want to come back to.'}
+  heading:{research:'Start a new session.',search:'Pick through the corpus.',saved:'Keep the receipts.',consolidate:'Read the whole tree.'},
+  intro:{research:'Take the long and scenic route with a full session at the research desk.',search:'Search for exact terms, speakers, or a line you vaguely remember.',saved:'A shelf for the lines you want to come back to.',consolidate:'Gather conversations and turn their branches into sourced notes.'}
 });
 let view='research',busy=false,status={},poll;
 let currentChatId=null,currentChat=null,library={chats:[],folders:[]},folderFilter='all',nameAction=null,deleteAction=null;
@@ -34,7 +35,7 @@ function variantControls(turn,allowRetry=false){
 function updateRetryButton(){const last=currentChat?.turns.at(-1);alternatives.hidden=view!=='research'||busy||!last||last.status==='pending';alternatives.innerHTML=last?variantControls(last,true):'';}
 function retryLatestResponse(){const last=currentChat?.turns.at(-1);if(busy||!last||last.status==='pending')return;retryTurn=last;$('#query').value=last.question;$('#query-form').requestSubmit();}
 document.addEventListener('click',async e=>{const button=e.target.closest('[data-variant-turn]');if(!button||button.disabled||busy)return;if(button.dataset.retryResponse){retryLatestResponse();return;}try{currentChat=await api('chat/variant',{chatId:currentChatId,turnId:button.dataset.variantTurn,index:Number(button.dataset.variantIndex)});renderChat(currentChat);}catch(e){feedback(e.message,true);}});
-function syncMode(){const direct=view==='research'&&$('#depth').value==='chat';$('#source-options-heading').closest('section').hidden=direct;$('.filters').hidden=view==='saved'||direct;$('#speaker').disabled=direct;$('#skill').disabled=direct;if(view==='research'&&!busy)$('#submit').textContent=document.body.classList.contains('chat-active')?'Send':direct?'Send':'Research';}
+function syncMode(){const direct=view==='research'&&$('#depth').value==='chat';$('#source-options-heading').closest('section').hidden=direct;$('.filters').hidden=view==='saved'||view==='consolidate'||direct;$('#speaker').disabled=direct;$('#skill').disabled=direct;if(view==='research'&&!busy)$('#submit').textContent=document.body.classList.contains('chat-active')?'Send':direct?'Send':'Research';}
 $('#depth').onchange=syncMode;
 const composerDock=document.createElement('div');composerDock.id='composer-dock';composerDock.hidden=true;document.querySelector('main').append(composerDock);
 const dockResize=new ResizeObserver(()=>{document.documentElement.style.setProperty('--composer-height',composerDock.hidden?'0px':composerDock.getBoundingClientRect().height+'px');});dockResize.observe(composerDock);
@@ -57,8 +58,10 @@ function saveReading(){localStorage.setItem('minnie-reading',JSON.stringify(read
 applyReading();
 async function api(path,body){const r=await fetch('/api/'+path,body!==undefined?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});const value=await r.json();if(!r.ok){if(r.status===401&&!$('#login-dialog').open)$('#login-dialog').showModal();throw Error(value.error||'Request failed.');}return value;}
 const presetPanel=initPresetPanel({api,icon});
+let pendingConsolidation=null;
+const consolidation=initConsolidate({api,onRun:({conversationIds,query})=>{if(busy)return;newChat();pendingConsolidation=conversationIds;$('#query').value=query;$('#verbosity').value='detailed';$('#query-form').requestSubmit();}});
 function feedback(text,error=false){$('#feedback').textContent=text;$('#feedback').className=error?'error':'';}
-function setView(next){if(busy)return;view=next;document.querySelectorAll('[data-view]').forEach(b=>{const active=b.dataset.view===view;b.classList.toggle('active',active);if(b.hasAttribute('role'))b.setAttribute('aria-selected',active)});const shelf=view==='saved';$('#page-label').textContent=UI_COPY.section[view];$('#heading').textContent=UI_COPY.heading[shelf?'saved':view];$('#intro').textContent=UI_COPY.intro[shelf?'saved':view];$('#page-symbol').innerHTML=view==='search'?icon('search'):shelf?icon('bookmark'):researchPageIcon;$('.tabs').hidden=shelf;$('#query-form').hidden=shelf;$('.filters').hidden=shelf;$('#saved-view').hidden=!shelf;$('#starting').hidden=shelf;$('#output').hidden=true;$('#depth-wrap').hidden=view!=='research';$('#verbosity-wrap').hidden=view!=='research';$('#mode-wrap').hidden=view!=='search';$('#submit').textContent=view==='search'?'Search':'Research';$('#query').placeholder=view==='search'?'A phrase, a name, a fragment of dialogue…':UI_COPY.researchPlaceholder;feedback('');if(shelf)renderSaved();}
+function setView(next){if(busy)return;view=next;document.querySelectorAll('[data-view]').forEach(b=>{const active=b.dataset.view===view||(view==='consolidate'&&b.dataset.view==='research'&&!b.hasAttribute('role'));b.classList.toggle('active',active);if(b.hasAttribute('role'))b.setAttribute('aria-selected',active)});const shelf=view==='saved',consolidating=view==='consolidate';$('#consolidate-view').hidden=!consolidating;$('#page-label').textContent=UI_COPY.section[view];$('#heading').textContent=UI_COPY.heading[shelf?'saved':view];$('#intro').textContent=UI_COPY.intro[shelf?'saved':view];$('#page-symbol').innerHTML=view==='search'?icon('search'):shelf?icon('bookmark'):researchPageIcon;$('.tabs').hidden=shelf;$('#query-form').hidden=shelf||consolidating;$('.filters').hidden=shelf||consolidating;$('#saved-view').hidden=!shelf;$('#starting').hidden=shelf||consolidating;$('#output').hidden=true;$('#depth-wrap').hidden=view!=='research';$('#verbosity-wrap').hidden=view!=='research';$('#mode-wrap').hidden=view!=='search';$('#submit').textContent=view==='search'?'Search':'Research';$('#query').placeholder=view==='search'?'A phrase, a name, a fragment of dialogue…':UI_COPY.researchPlaceholder;feedback('');if(shelf)renderSaved();if(consolidating)consolidation.refresh();}
 document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{if(busy)return;setView(b.dataset.view);syncChatView();});
 document.querySelectorAll('[data-prompt]').forEach(b=>b.onclick=()=>{$('#query').value=b.dataset.prompt;$('#query').focus();});
 function card(n,focus=false){const isSaved=saved.some(x=>x.id===n.id);return `<article class="evidence-card ${focus?'evidence-focus':''}"><div class="card-top"><span class="speaker-name">${escapeHTML(n.speaker)}</span><span class="node-id">${escapeHTML(n.id)}</span></div><p class="dialogue-text">${escapeHTML(n.speaker.trim().toUpperCase()==='HUB'?'Dialogue choice point':n.text||'(Branch node without spoken dialogue)')}</p><div class="card-actions"><button class="text-button" data-context="${escapeHTML(n.id)}">Open dialogue context</button><button class="text-button" data-save="${escapeHTML(n.id)}">${isSaved?icon('check')+' Saved':'Save evidence'}</button><small>${escapeHTML(n.title)}</small></div>${n.retrieval?`<details><summary>Retrieval details</summary><pre>${escapeHTML(JSON.stringify(n.retrieval,null,2))}</pre></details>`:''}</article>`;}
@@ -228,7 +231,7 @@ async function openContext(id,back=false){
   const d=$('#evidence-dialog'),request=++contextRequest;
   if(!d.open){contextTrail=[];contextCurrent=null;d.showModal();}
   if(!back&&contextCurrent&&contextCurrent!==id)contextTrail.push(contextCurrent);
-  contextCurrent=id;$('#evidence-title').textContent='Source '+id;$('#context-copy-status').textContent='';$('#copy-dialogue-context').disabled=true;$('#evidence-body').textContent='Following dialogue links…';
+  contextCurrent=id;$('#evidence-title').textContent='Source '+id;$('#context-copy-status').textContent='';$('#copy-dialogue-context').disabled=true;$('#summarize-conversation').disabled=true;$('#evidence-body').textContent='Following dialogue links…';
   try{
     const data=await api('context',{nodeId:id,depth:1,includeBranch:true});if(request!==contextRequest)return;
     const branch=data.branch,center=data.center,parents=new Set(data.edges.filter(e=>e.to===id).map(e=>e.from));
@@ -244,7 +247,7 @@ async function openContext(id,back=false){
     if(prior.length)html+=`<details><summary>Leads into this line · ${prior.length} links</summary>${prior.map(n=>card(n)).join('')}</details>`;
     $('#evidence-body').innerHTML=html;bindCards($('#evidence-body'),[...data.nodes,...branch.sequence,...branch.choices]);
     if($('#context-back'))$('#context-back').onclick=()=>openContext(contextTrail.pop(),true);
-    $('#copy-dialogue-context').disabled=false;d.scrollTop=0;
+    $('#copy-dialogue-context').disabled=false;$('#summarize-conversation').disabled=false;$('#summarize-conversation').onclick=async()=>{if(busy)return;try{await consolidation.add(center.conversation);d.close();setView('consolidate');syncChatView();$('#consolidate-prompt').focus();}catch(e){$('#context-copy-status').textContent=e.message;}};d.scrollTop=0;
   }catch(e){if(request===contextRequest)$('#evidence-body').textContent=e.message;}
 }
 
@@ -283,20 +286,20 @@ async function resumeResearch(chat){
   finally{busy=false;streamController=null;activeTurnId=null;document.body.classList.remove('chat-busy');$('#submit').hidden=false;$('#submit').disabled=false;stopButton.hidden=true;try{currentChat=await api('chat',{id:chat.id});renderChat(currentChat);await refreshLibrary();}catch(e){feedback(e.message,true);}updateRetryButton();}
 }
 function showResults(data){
-  $('#output').hidden=false;$('#output-title').textContent=view==='search'?`${data.results.length} dialogue matches`:data.mode==='chat'?'Response':'Research notes';
+  $('#output').hidden=false;$('#output-title').textContent=view==='search'?`${data.results.length} dialogue matches`:data.mode==='chat'?'Response':data.mode==='consolidate'?'Conversation summary':'Research notes';
   $('#answer').hidden=view==='search';$('#answer').innerHTML=view==='research'?renderAnswer(data.answer):'';
   $('#reasoning-panel').hidden=view!=='research'||!data.reasoning;$('#reasoning-text').textContent=data.reasoning||'';
   const nodes=data.results||data.evidence;
   $('#results').innerHTML=data.mode==='chat'||(!nodes.length&&data.mode==='stopped')?'':(view==='research'?'<div class="section-heading"><h2>Cited evidence</h2><span>Open a line to follow its branch.</span></div>':'')+(nodes.length?nodes.map(n=>card(n)).join(''):'<p class="empty">No matching dialogue found. Try fewer words or a different spelling.</p>');
   if(data.suggestion){$('#results').insertAdjacentHTML('afterbegin',`<p class="notice">Did you mean <button class="text-button" id="suggestion">${escapeHTML(data.suggestion)}</button>?</p>`);$('#suggestion').onclick=()=>{$('#query').value=data.suggestion;$('#query-form').requestSubmit();};}
   $('#citation-warning').hidden=!data.citationWarning;$('#citation-warning').textContent='This answer contains missing or unverified citations. Treat it as a research lead and check the dialogue.';
-  if(data.trace?.length)$('#results').insertAdjacentHTML('beforeend',`<details><summary>Research trail · ${data.trace.length} follow-up searches</summary><pre>${escapeHTML(data.trace.join('\n'))}</pre></details>`);
+  if(data.trace?.length)$('#results').insertAdjacentHTML('beforeend',`<details><summary>${data.mode==='consolidate'?'Conversation coverage':`Research trail · ${data.trace.length} follow-up searches`}</summary><pre>${escapeHTML(data.trace.join('\n'))}</pre></details>`);
   bindCards($('#results'),nodes);bindCards($('#answer'),data.retrieved||[]);
-  feedback(data.mode==='chat'?'No search · conversation only.':data.semantic?'Lexical and semantic evidence retrieved.':'Lexical retrieval · semantic index not in use.');
+  feedback(data.mode==='consolidate'?`Conversation trees read · ${data.coverage.records.toLocaleString()} records in ${data.coverage.parts} parts.`:data.mode==='chat'?'No search · conversation only.':data.semantic?'Lexical and semantic evidence retrieved.':'Lexical retrieval · semantic index not in use.');
 }
 $('#query-form').onsubmit=async e=>{
   e.preventDefault();const query=$('#query').value.trim();if(!query||busy)return;
-  const retry=retryTurn;retryTurn=null;const depth=retry?.request?.depth||$('#depth').value,verbosity=retry?.request?.verbosity||$('#verbosity').value;
+  const retry=retryTurn;retryTurn=null;const conversationIds=retry?.request?.conversationIds||pendingConsolidation;pendingConsolidation=null;const depth=conversationIds?'consolidate':retry?.request?.depth||$('#depth').value,verbosity=retry?.request?.verbosity||$('#verbosity').value;
   stopRequested=false;streamedPartial={answer:'',reasoning:''};activeTurnId=null;streamController=new AbortController();stopButton.hidden=view!=='research';stopButton.disabled=true;$('#submit').hidden=view==='research';alternatives.hidden=true;
   busy=true;document.body.classList.add('chat-busy');$('#submit').disabled=true;$('#starting').hidden=true;$('#output').hidden=true;$('#answer').textContent='';$('#results').textContent='';$('#reasoning-panel').hidden=true;$('#reasoning-panel').open=false;$('#reasoning-text').textContent='';$('#citation-warning').hidden=true;
   if(view==='research'){$('#query').value='';conversationLayout(true);}
@@ -307,7 +310,7 @@ $('#query-form').onsubmit=async e=>{
       if(currentChatId){currentChat=await api('chat',{id:currentChatId});renderHistory(retry?currentChat.turns.slice(0,-1):currentChat.turns);}
       $('#current-question').textContent=query;$('#current-question').hidden=false;
     }
-    const data=view==='search'?await api('search',{...common,mode:$('#mode').value,limit:50}):await streamArchive({...common,chatId:currentChatId,folderId:folderFilter==='all'?null:folderFilter,depth,verbosity,presetId:retry?.request?.presetId||presetPanel.id,retryTurnId:retry?.id});
+    const data=view==='search'?await api('search',{...common,mode:$('#mode').value,limit:50}):await streamArchive({...common,chatId:currentChatId,folderId:folderFilter==='all'?null:folderFilter,depth,verbosity,conversationIds,presetId:retry?.request?.presetId||presetPanel.id,retryTurnId:retry?.id});
     showResults(data);
     if(view==='research'){currentChatId=data.chatId;currentChat=await api('chat',{id:currentChatId});$('#query').placeholder='Ask a follow-up…';$('#chat-title').textContent=currentChat.title;await refreshLibrary();}
   }catch(err){feedback(stopRequested?'Response stopped.':err.message,!stopRequested);if($('#answer').textContent||$('#reasoning-text').textContent){$('#output-title').textContent=stopRequested?'Stopped · partial response':'Interrupted research · partial output';$('#output').hidden=false;}else $('#starting').hidden=false;}
